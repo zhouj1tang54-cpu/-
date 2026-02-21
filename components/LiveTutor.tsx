@@ -830,9 +830,21 @@ const LiveTutor: React.FC = () => {
     }
   }, [handleSendMessage, updateTranscript]);
 
-  const handleAskExplain = () => {
-      if (!activePopup) return;
-      const prompt = `请详细为我讲解一下这个${activePopup.type === 'knowledge' ? '知识点' : '题眼'}：${activePopup.content}`;
+  const handleAskExplain = (arg1?: any, arg2?: string) => {
+      let t: 'knowledge' | 'eye' | undefined;
+      let c: string | undefined;
+
+      if (typeof arg1 === 'string') {
+          t = arg1 as 'knowledge' | 'eye';
+          c = arg2;
+      } else {
+          t = activePopup?.type;
+          c = activePopup?.content;
+      }
+      
+      if (!t || !c) return;
+
+      const prompt = `请详细为我讲解一下这个${t === 'knowledge' ? '知识点' : '题眼'}：${c}`;
       handleSendMessage(prompt);
       setActivePopup(null);
   };
@@ -885,28 +897,30 @@ const LiveTutor: React.FC = () => {
 
       {/* Main Video Area */}
       <div className="flex-1 flex flex-col relative">
-        {/* Header */}
-        <div className="absolute top-0 left-0 right-0 z-10 p-4 bg-gradient-to-b from-black/70 to-transparent flex justify-between items-center">
-            <div className="flex items-center gap-2">
-                <div className="bg-indigo-600 p-2 rounded-lg">
-                    <Video size={20} className="text-white" />
+        {/* Header - Only show when connected */}
+        {connectionState !== ConnectionState.DISCONNECTED && (
+            <div className="absolute top-0 left-0 right-0 z-10 p-4 bg-gradient-to-b from-black/70 to-transparent flex justify-between items-center">
+                <div className="flex items-center gap-2">
+                    <div className="bg-indigo-600 p-2 rounded-lg">
+                        <Video size={20} className="text-white" />
+                    </div>
+                    <h1 className="text-xl font-bold tracking-tight">Live Tutor</h1>
                 </div>
-                <h1 className="text-xl font-bold tracking-tight">AI 实时解题导师</h1>
+                
+                <div className="flex items-center gap-4">
+                     <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-black/40 backdrop-blur-md border border-white/10">
+                        <span className={`w-2 h-2 rounded-full ${
+                            connectionState === ConnectionState.CONNECTED ? 'bg-green-500 animate-pulse' : 
+                            connectionState === ConnectionState.CONNECTING ? 'bg-yellow-500' : 'bg-red-500'
+                        }`}></span>
+                        <span className="text-xs font-medium text-gray-300">
+                            {connectionState === ConnectionState.CONNECTED ? '实时连接中' : 
+                             connectionState === ConnectionState.CONNECTING ? '连接中...' : '未连接'}
+                        </span>
+                     </div>
+                </div>
             </div>
-            
-            <div className="flex items-center gap-4">
-                 <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-black/40 backdrop-blur-md border border-white/10">
-                    <span className={`w-2 h-2 rounded-full ${
-                        connectionState === ConnectionState.CONNECTED ? 'bg-green-500 animate-pulse' : 
-                        connectionState === ConnectionState.CONNECTING ? 'bg-yellow-500' : 'bg-red-500'
-                    }`}></span>
-                    <span className="text-xs font-medium text-gray-300">
-                        {connectionState === ConnectionState.CONNECTED ? '实时连接中' : 
-                         connectionState === ConnectionState.CONNECTING ? '连接中...' : '未连接'}
-                    </span>
-                 </div>
-            </div>
-        </div>
+        )}
 
         {/* Video Feed */}
         <div className="flex-1 relative bg-black flex items-center justify-center overflow-hidden group">
@@ -972,8 +986,14 @@ const LiveTutor: React.FC = () => {
                                 <span>核心知识点</span>
                             </div>
                             <p className="text-gray-100 text-sm leading-relaxed font-medium line-clamp-2">{insightData.knowledge}</p>
-                            <div className="text-xs text-indigo-400 mt-2 flex items-center opacity-0 group-hover:opacity-100 transition-opacity">
-                                点击查看详情 <ArrowRight size={12} className="ml-1" />
+                            <div 
+                                className="text-xs text-indigo-400 mt-2 flex items-center transition-opacity hover:text-indigo-300 hover:underline"
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleAskExplain('knowledge', insightData.knowledge!);
+                                }}
+                            >
+                                <Sparkles size={12} className="mr-1" /> 点击让 AI 详细讲解
                             </div>
                         </div>
                     )}
@@ -988,8 +1008,14 @@ const LiveTutor: React.FC = () => {
                                 <span>解题关键 (题眼)</span>
                             </div>
                             <p className="text-gray-100 text-sm leading-relaxed font-medium line-clamp-2">{insightData.eye}</p>
-                            <div className="text-xs text-emerald-400 mt-2 flex items-center opacity-0 group-hover:opacity-100 transition-opacity">
-                                点击查看详情 <ArrowRight size={12} className="ml-1" />
+                            <div 
+                                className="text-xs text-emerald-400 mt-2 flex items-center transition-opacity hover:text-emerald-300 hover:underline"
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleAskExplain('eye', insightData.eye!);
+                                }}
+                            >
+                                <Sparkles size={12} className="mr-1" /> 点击让 AI 详细讲解
                             </div>
                         </div>
                     )}
@@ -1115,151 +1141,153 @@ const LiveTutor: React.FC = () => {
                 </div>
             )}
 
-            {/* Settings & Profile Overlay (Top Right inside video) */}
-            <div className="absolute top-20 right-4 flex flex-col gap-3 z-30">
-                {/* Mirror Toggle */}
-                <button 
-                    onClick={() => setIsVideoMirrored(!isVideoMirrored)}
-                    className={`p-3 rounded-full text-white backdrop-blur-md border border-white/10 transition-all ${isVideoMirrored ? 'bg-indigo-600/80 hover:bg-indigo-600' : 'bg-black/50 hover:bg-black/70'}`}
-                    title={isVideoMirrored ? "关闭镜像" : "开启镜像"}
-                >
-                    <FlipHorizontal size={20} />
-                </button>
+            {/* Settings & Profile Overlay (Top Right inside video) - Only show when connected */}
+            {connectionState !== ConnectionState.DISCONNECTED && (
+                <div className="absolute top-20 right-4 flex flex-col gap-3 z-30">
+                    {/* Mirror Toggle */}
+                    <button 
+                        onClick={() => setIsVideoMirrored(!isVideoMirrored)}
+                        className={`p-3 rounded-full text-white backdrop-blur-md border border-white/10 transition-all ${isVideoMirrored ? 'bg-indigo-600/80 hover:bg-indigo-600' : 'bg-black/50 hover:bg-black/70'}`}
+                        title={isVideoMirrored ? "关闭镜像" : "开启镜像"}
+                    >
+                        <FlipHorizontal size={20} />
+                    </button>
 
-                {/* Profile Toggle */}
-                <button 
-                    onClick={() => {
-                        setShowProfileModal(true);
-                        setShowSettings(false);
-                    }}
-                    className="p-3 rounded-full bg-black/50 hover:bg-black/70 text-white backdrop-blur-md border border-white/10 transition-all group relative"
-                    title="个人资料"
-                >
-                    <UserRoundPen size={20} />
-                    {userProfile.avatar && (
-                        <span className="absolute -top-1 -right-1 flex h-5 w-5 items-center justify-center rounded-full bg-indigo-500 text-xs shadow-sm ring-2 ring-black">
-                            {userProfile.avatar}
-                        </span>
-                    )}
-                </button>
+                    {/* Profile Toggle */}
+                    <button 
+                        onClick={() => {
+                            setShowProfileModal(true);
+                            setShowSettings(false);
+                        }}
+                        className="p-3 rounded-full bg-black/50 hover:bg-black/70 text-white backdrop-blur-md border border-white/10 transition-all group relative"
+                        title="个人资料"
+                    >
+                        <UserRoundPen size={20} />
+                        {userProfile.avatar && (
+                            <span className="absolute -top-1 -right-1 flex h-5 w-5 items-center justify-center rounded-full bg-indigo-500 text-xs shadow-sm ring-2 ring-black">
+                                {userProfile.avatar}
+                            </span>
+                        )}
+                    </button>
 
-                {/* Camera Settings Toggle */}
-                <button 
-                    onClick={() => {
-                        setShowSettings(!showSettings);
-                        setShowProfileModal(false);
-                    }}
-                    className="p-3 rounded-full bg-black/50 hover:bg-black/70 text-white backdrop-blur-md border border-white/10 transition-all"
-                    title="设置"
-                >
-                    <Settings size={20} />
-                </button>
-                
-                {/* Settings Dropdown */}
-                {showSettings && (
-                    <div className="flex flex-col gap-2 p-3 rounded-2xl bg-black/60 backdrop-blur-xl border border-white/10 animate-in fade-in zoom-in duration-200 w-64 shadow-2xl">
-                        <div className="text-xs font-semibold text-gray-400 mb-1 uppercase tracking-wider">摄像头设置</div>
-                        
-                        {/* Device Selector */}
-                        <div className="relative mb-2">
-                            <select 
-                                value={selectedCameraId}
-                                onChange={(e) => switchCamera(e.target.value)}
-                                className="w-full bg-gray-800/80 text-white text-sm rounded-lg p-2 pl-8 outline-none border border-gray-700 hover:border-indigo-500 appearance-none"
+                    {/* Camera Settings Toggle */}
+                    <button 
+                        onClick={() => {
+                            setShowSettings(!showSettings);
+                            setShowProfileModal(false);
+                        }}
+                        className="p-3 rounded-full bg-black/50 hover:bg-black/70 text-white backdrop-blur-md border border-white/10 transition-all"
+                        title="设置"
+                    >
+                        <Settings size={20} />
+                    </button>
+                    
+                    {/* Settings Dropdown */}
+                    {showSettings && (
+                        <div className="flex flex-col gap-2 p-3 rounded-2xl bg-black/60 backdrop-blur-xl border border-white/10 animate-in fade-in zoom-in duration-200 w-64 shadow-2xl">
+                            <div className="text-xs font-semibold text-gray-400 mb-1 uppercase tracking-wider">摄像头设置</div>
+                            
+                            {/* Device Selector */}
+                            <div className="relative mb-2">
+                                <select 
+                                    value={selectedCameraId}
+                                    onChange={(e) => switchCamera(e.target.value)}
+                                    className="w-full bg-gray-800/80 text-white text-sm rounded-lg p-2 pl-8 outline-none border border-gray-700 hover:border-indigo-500 appearance-none"
+                                >
+                                    {videoDevices.map(device => (
+                                        <option key={device.deviceId} value={device.deviceId}>
+                                            {device.label || `摄像头 ${device.deviceId.slice(0, 5)}...`}
+                                        </option>
+                                    ))}
+                                </select>
+                                <Camera size={14} className="absolute left-2.5 top-2.5 text-gray-400 pointer-events-none" />
+                            </div>
+
+                            {/* Smart Quality Toggle */}
+                            <div className="mb-2">
+                                 <button 
+                                    onClick={() => setIsAutoQuality(!isAutoQuality)}
+                                    className={`w-full flex items-center justify-between p-2 rounded-lg text-sm transition-colors ${isAutoQuality ? 'bg-emerald-600/30 text-emerald-200' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'}`}
+                                 >
+                                     <div className="flex items-center gap-2">
+                                         <Wifi size={16} />
+                                         <span>智能画质调节</span>
+                                     </div>
+                                     <div className={`w-8 h-4 rounded-full relative transition-colors ${isAutoQuality ? 'bg-emerald-500' : 'bg-gray-600'}`}>
+                                         <div className={`absolute top-0.5 w-3 h-3 bg-white rounded-full transition-all ${isAutoQuality ? 'left-4.5' : 'left-0.5'}`} style={{left: isAutoQuality ? '18px' : '2px'}} />
+                                     </div>
+                                 </button>
+                                 {isAutoQuality && (
+                                    <div className="mt-1 px-2 flex justify-between items-center text-[10px]">
+                                        <span className="text-gray-500">当前网络:</span>
+                                        <span className={`font-medium ${
+                                            networkStatus === 'good' ? 'text-green-400' : 
+                                            networkStatus === 'moderate' ? 'text-yellow-400' : 
+                                            networkStatus === 'poor' ? 'text-red-400' : 'text-gray-400'
+                                        }`}>
+                                            {networkStatus === 'good' ? '极佳' : networkStatus === 'moderate' ? '一般' : networkStatus === 'poor' ? '较差' : '未知'}
+                                        </span>
+                                    </div>
+                                 )}
+                            </div>
+
+                            {/* Frame Rate / Speed Slider */}
+                            <div className={`mb-3 px-1 transition-opacity ${isAutoQuality ? 'opacity-50 pointer-events-none' : 'opacity-100'}`}>
+                                <div className="flex items-center justify-between text-xs text-gray-400 mb-2">
+                                    <div className="flex items-center gap-1">
+                                        <Gauge size={14} />
+                                        <span>{isAutoQuality ? "识别速度 (自动)" : "识别速度 (手动)"}</span>
+                                    </div>
+                                    <span className="text-indigo-400 font-mono">{videoFrameRate} FPS</span>
+                                </div>
+                                <input 
+                                    type="range" 
+                                    min="0.5" 
+                                    max="5" 
+                                    step="0.5" 
+                                    value={videoFrameRate}
+                                    onChange={(e) => setVideoFrameRate(parseFloat(e.target.value))}
+                                    className="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-indigo-500 hover:accent-indigo-400 transition-all"
+                                />
+                                <div className="flex justify-between text-[10px] text-gray-600 mt-1 font-medium">
+                                    <span>省流</span>
+                                    <span>极速</span>
+                                </div>
+                            </div>
+
+                            <div className="h-px bg-gray-700/50 my-2" />
+
+                            {/* Mirror Toggle */}
+                            <button 
+                                onClick={() => setIsVideoMirrored(!isVideoMirrored)}
+                                className={`flex items-center justify-between p-2 rounded-lg text-sm transition-colors ${isVideoMirrored ? 'bg-indigo-600/30 text-indigo-200' : 'hover:bg-gray-700/50'}`}
                             >
-                                {videoDevices.map(device => (
-                                    <option key={device.deviceId} value={device.deviceId}>
-                                        {device.label || `摄像头 ${device.deviceId.slice(0, 5)}...`}
-                                    </option>
-                                ))}
-                            </select>
-                            <Camera size={14} className="absolute left-2.5 top-2.5 text-gray-400 pointer-events-none" />
-                        </div>
-
-                        {/* Smart Quality Toggle */}
-                        <div className="mb-2">
-                             <button 
-                                onClick={() => setIsAutoQuality(!isAutoQuality)}
-                                className={`w-full flex items-center justify-between p-2 rounded-lg text-sm transition-colors ${isAutoQuality ? 'bg-emerald-600/30 text-emerald-200' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'}`}
-                             >
-                                 <div className="flex items-center gap-2">
-                                     <Wifi size={16} />
-                                     <span>智能画质调节</span>
-                                 </div>
-                                 <div className={`w-8 h-4 rounded-full relative transition-colors ${isAutoQuality ? 'bg-emerald-500' : 'bg-gray-600'}`}>
-                                     <div className={`absolute top-0.5 w-3 h-3 bg-white rounded-full transition-all ${isAutoQuality ? 'left-4.5' : 'left-0.5'}`} style={{left: isAutoQuality ? '18px' : '2px'}} />
-                                 </div>
-                             </button>
-                             {isAutoQuality && (
-                                <div className="mt-1 px-2 flex justify-between items-center text-[10px]">
-                                    <span className="text-gray-500">当前网络:</span>
-                                    <span className={`font-medium ${
-                                        networkStatus === 'good' ? 'text-green-400' : 
-                                        networkStatus === 'moderate' ? 'text-yellow-400' : 
-                                        networkStatus === 'poor' ? 'text-red-400' : 'text-gray-400'
-                                    }`}>
-                                        {networkStatus === 'good' ? '极佳' : networkStatus === 'moderate' ? '一般' : networkStatus === 'poor' ? '较差' : '未知'}
-                                    </span>
+                                <div className="flex items-center gap-2">
+                                    <RefreshCw size={16} />
+                                    <span>镜像画面</span>
                                 </div>
-                             )}
-                        </div>
-
-                        {/* Frame Rate / Speed Slider */}
-                        <div className={`mb-3 px-1 transition-opacity ${isAutoQuality ? 'opacity-50 pointer-events-none' : 'opacity-100'}`}>
-                            <div className="flex items-center justify-between text-xs text-gray-400 mb-2">
-                                <div className="flex items-center gap-1">
-                                    <Gauge size={14} />
-                                    <span>{isAutoQuality ? "识别速度 (自动)" : "识别速度 (手动)"}</span>
+                                <div className={`w-8 h-4 rounded-full relative transition-colors ${isVideoMirrored ? 'bg-indigo-500' : 'bg-gray-600'}`}>
+                                    <div className={`absolute top-0.5 w-3 h-3 bg-white rounded-full transition-all ${isVideoMirrored ? 'left-4.5' : 'left-0.5'}`} style={{left: isVideoMirrored ? '18px' : '2px'}} />
                                 </div>
-                                <span className="text-indigo-400 font-mono">{videoFrameRate} FPS</span>
-                            </div>
-                            <input 
-                                type="range" 
-                                min="0.5" 
-                                max="5" 
-                                step="0.5" 
-                                value={videoFrameRate}
-                                onChange={(e) => setVideoFrameRate(parseFloat(e.target.value))}
-                                className="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-indigo-500 hover:accent-indigo-400 transition-all"
-                            />
-                            <div className="flex justify-between text-[10px] text-gray-600 mt-1 font-medium">
-                                <span>省流</span>
-                                <span>极速</span>
-                            </div>
+                            </button>
+                            
+                            {/* Speaker Mute Toggle */}
+                            <button 
+                                onClick={() => setIsSpeakerMuted(!isSpeakerMuted)}
+                                className={`flex items-center justify-between p-2 rounded-lg text-sm transition-colors ${isSpeakerMuted ? 'bg-red-500/20 text-red-200' : 'hover:bg-gray-700/50'}`}
+                            >
+                                <div className="flex items-center gap-2">
+                                    {isSpeakerMuted ? <VolumeX size={16} /> : <Volume2 size={16} />}
+                                    <span>AI 语音播放</span>
+                                </div>
+                                <div className={`w-8 h-4 rounded-full relative transition-colors ${!isSpeakerMuted ? 'bg-green-500' : 'bg-gray-600'}`}>
+                                    <div className={`absolute top-0.5 w-3 h-3 bg-white rounded-full transition-all`} style={{left: !isSpeakerMuted ? '18px' : '2px'}} />
+                                </div>
+                            </button>
                         </div>
-
-                        <div className="h-px bg-gray-700/50 my-2" />
-
-                        {/* Mirror Toggle */}
-                        <button 
-                            onClick={() => setIsVideoMirrored(!isVideoMirrored)}
-                            className={`flex items-center justify-between p-2 rounded-lg text-sm transition-colors ${isVideoMirrored ? 'bg-indigo-600/30 text-indigo-200' : 'hover:bg-gray-700/50'}`}
-                        >
-                            <div className="flex items-center gap-2">
-                                <RefreshCw size={16} />
-                                <span>镜像画面</span>
-                            </div>
-                            <div className={`w-8 h-4 rounded-full relative transition-colors ${isVideoMirrored ? 'bg-indigo-500' : 'bg-gray-600'}`}>
-                                <div className={`absolute top-0.5 w-3 h-3 bg-white rounded-full transition-all ${isVideoMirrored ? 'left-4.5' : 'left-0.5'}`} style={{left: isVideoMirrored ? '18px' : '2px'}} />
-                            </div>
-                        </button>
-                        
-                        {/* Speaker Mute Toggle */}
-                        <button 
-                            onClick={() => setIsSpeakerMuted(!isSpeakerMuted)}
-                            className={`flex items-center justify-between p-2 rounded-lg text-sm transition-colors ${isSpeakerMuted ? 'bg-red-500/20 text-red-200' : 'hover:bg-gray-700/50'}`}
-                        >
-                            <div className="flex items-center gap-2">
-                                {isSpeakerMuted ? <VolumeX size={16} /> : <Volume2 size={16} />}
-                                <span>AI 语音播放</span>
-                            </div>
-                            <div className={`w-8 h-4 rounded-full relative transition-colors ${!isSpeakerMuted ? 'bg-green-500' : 'bg-gray-600'}`}>
-                                <div className={`absolute top-0.5 w-3 h-3 bg-white rounded-full transition-all`} style={{left: !isSpeakerMuted ? '18px' : '2px'}} />
-                            </div>
-                        </button>
-                    </div>
-                )}
-            </div>
+                    )}
+                </div>
+            )}
 
             {/* Profile Edit Modal */}
             {showProfileModal && (
@@ -1422,30 +1450,36 @@ const LiveTutor: React.FC = () => {
             
             {/* Welcome / Disconnected State */}
             {connectionState === ConnectionState.DISCONNECTED && !error && (
-                 <div className="absolute inset-0 flex items-center justify-center bg-black/60 backdrop-blur-sm z-30">
-                    <div className="text-center p-8">
-                        <div className="inline-block p-4 rounded-full bg-indigo-600/20 mb-4 animate-bounce">
-                            <Video size={48} className="text-indigo-400" />
-                        </div>
-                        <h2 className="text-2xl font-bold mb-2">准备好开始了吗？</h2>
-                        <div className="flex items-center justify-center gap-2 mb-8">
-                            <span className="text-2xl">{userProfile.avatar}</span>
-                            <p className="text-gray-300">
-                                欢迎回来{userProfile.name ? `，${userProfile.name}` : ''}
+                 <div className="absolute inset-0 flex items-center justify-center bg-black/90 z-30">
+                    <div className="text-center p-8 max-w-2xl animate-in fade-in zoom-in duration-500">
+                        <div className="mb-12">
+                            <h1 className="text-5xl md:text-6xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 via-indigo-500 to-purple-500 mb-6 tracking-tight">
+                                未来的学习体验
+                            </h1>
+                            <p className="text-gray-400 text-lg md:text-xl font-light leading-relaxed">
+                                实时连接 AI 导师。使用视频进行互动讲解，为您提供个性化的辅导体验。
                             </p>
-                            <button onClick={() => setShowProfileModal(true)} className="text-indigo-400 hover:text-indigo-300 text-xs underline">修改资料</button>
                         </div>
-                        
-                        <p className="text-gray-400 max-w-md mx-auto mb-8">
-                            请将摄像头对准题目，并用手指或笔指向你想问的具体位置。
-                        </p>
-                        <button 
-                            onClick={startSession}
-                            className="px-8 py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-full font-semibold transition-all shadow-lg shadow-indigo-600/20 flex items-center gap-2 mx-auto hover:scale-105 active:scale-95"
-                        >
-                            <Play size={20} fill="currentColor" />
-                            开始辅导
-                        </button>
+
+                        <div className="flex flex-col items-center gap-8">
+                            <button 
+                                onClick={startSession}
+                                className="px-12 py-4 bg-white text-black hover:bg-gray-100 rounded-full font-bold text-lg transition-all shadow-[0_0_25px_rgba(255,255,255,0.2)] hover:shadow-[0_0_40px_rgba(255,255,255,0.4)] hover:scale-105 active:scale-95 flex items-center gap-3"
+                            >
+                                立即开始上课
+                            </button>
+                            
+                            <div className="flex items-center gap-3 text-sm text-gray-500 bg-gray-800/50 px-4 py-2 rounded-full border border-gray-700/50 backdrop-blur-sm">
+                                <span className="flex items-center gap-2">
+                                    <span className="text-xl">{userProfile.avatar}</span>
+                                    {userProfile.name ? `欢迎回来，${userProfile.name}` : '欢迎新同学'}
+                                </span>
+                                <span className="w-1 h-1 bg-gray-600 rounded-full"></span>
+                                <button onClick={() => setShowProfileModal(true)} className="text-indigo-400 hover:text-indigo-300 underline transition-colors">
+                                    修改资料
+                                </button>
+                            </div>
+                        </div>
                     </div>
                  </div>
             )}
@@ -1468,75 +1502,79 @@ const LiveTutor: React.FC = () => {
             )}
         </div>
 
-        {/* Controls Bar */}
-        <div className="h-24 bg-gray-900 border-t border-gray-800 flex items-center justify-center gap-6 px-4 z-20">
-            {connectionState === ConnectionState.CONNECTED ? (
-                <>
-                    <div className="flex items-center gap-4">
-                        {/* Audio Input Meter */}
-                        <div className="flex flex-col items-center justify-center gap-1 mr-2 opacity-80">
-                            <AudioVisualizer 
-                                analyser={inputAnalyser} 
-                                color={isMicMuted ? "#4b5563" : "#6366f1"} 
-                                width={50} 
-                                height={20} 
-                            />
+        {/* Controls Bar - Only show when connected */}
+        {connectionState !== ConnectionState.DISCONNECTED && (
+            <div className="h-24 bg-gray-900 border-t border-gray-800 flex items-center justify-center gap-6 px-4 z-20">
+                {connectionState === ConnectionState.CONNECTED ? (
+                    <>
+                        <div className="flex items-center gap-4">
+                            {/* Audio Input Meter */}
+                            <div className="flex flex-col items-center justify-center gap-1 mr-2 opacity-80">
+                                <AudioVisualizer 
+                                    analyser={inputAnalyser} 
+                                    color={isMicMuted ? "#4b5563" : "#6366f1"} 
+                                    width={50} 
+                                    height={20} 
+                                />
+                            </div>
+
+                            <button 
+                                onClick={() => setIsMicMuted(!isMicMuted)}
+                                className={`p-4 rounded-full transition-all duration-300 ${
+                                    isMicMuted 
+                                    ? 'bg-red-500/20 text-red-500 hover:bg-red-500/30 ring-2 ring-red-500/50' 
+                                    : 'bg-gray-800 text-white hover:bg-gray-700 hover:scale-110 active:scale-95'
+                                }`}
+                                title={isMicMuted ? "取消静音" : "静音"}
+                            >
+                                {isMicMuted ? <MicOff size={24} /> : <Mic size={24} />}
+                            </button>
                         </div>
 
-                        <button 
-                            onClick={() => setIsMicMuted(!isMicMuted)}
-                            className={`p-4 rounded-full transition-all duration-300 ${
-                                isMicMuted 
-                                ? 'bg-red-500/20 text-red-500 hover:bg-red-500/30 ring-2 ring-red-500/50' 
-                                : 'bg-gray-800 text-white hover:bg-gray-700 hover:scale-110 active:scale-95'
-                            }`}
-                            title={isMicMuted ? "取消静音" : "静音"}
-                        >
-                            {isMicMuted ? <MicOff size={24} /> : <Mic size={24} />}
-                        </button>
-                    </div>
+                        <div className="flex items-center gap-4">
+                            <button 
+                                onClick={() => saveSessionToHistory(true)}
+                                disabled={messages.length === 0}
+                                className={`p-4 rounded-full text-white transition-all relative group ${
+                                    messages.length === 0 
+                                    ? 'bg-gray-800 opacity-50 cursor-not-allowed' 
+                                    : 'bg-gray-800 hover:bg-gray-700 hover:scale-110 active:scale-95'
+                                }`}
+                                title="保存当前对话"
+                            >
+                                <Save size={24} className={showSaveConfirm ? "text-green-500 transition-colors" : ""} />
+                                {showSaveConfirm && (
+                                    <span className="absolute -top-10 left-1/2 transform -translate-x-1/2 text-xs font-bold bg-green-500/90 text-white px-3 py-1.5 rounded-lg shadow-lg animate-in fade-in slide-in-from-bottom-2 whitespace-nowrap z-50">
+                                        已保存
+                                    </span>
+                                )}
+                            </button>
 
-                    <div className="flex items-center gap-4">
-                        <button 
-                            onClick={() => saveSessionToHistory(true)}
-                            disabled={messages.length === 0}
-                            className={`p-4 rounded-full text-white transition-all relative group ${
-                                messages.length === 0 
-                                ? 'bg-gray-800 opacity-50 cursor-not-allowed' 
-                                : 'bg-gray-800 hover:bg-gray-700 hover:scale-110 active:scale-95'
-                            }`}
-                            title="保存当前对话"
-                        >
-                            <Save size={24} className={showSaveConfirm ? "text-green-500 transition-colors" : ""} />
-                            {showSaveConfirm && (
-                                <span className="absolute -top-10 left-1/2 transform -translate-x-1/2 text-xs font-bold bg-green-500/90 text-white px-3 py-1.5 rounded-lg shadow-lg animate-in fade-in slide-in-from-bottom-2 whitespace-nowrap z-50">
-                                    已保存
-                                </span>
-                            )}
-                        </button>
-
-                        <button 
-                            onClick={stopSession}
-                            className="p-4 rounded-full bg-red-600 text-white hover:bg-red-500 transition-all shadow-lg hover:shadow-red-600/20 hover:scale-110 active:scale-95"
-                            title="结束会话"
-                        >
-                            <Square size={24} fill="currentColor" />
-                        </button>
+                            <button 
+                                onClick={stopSession}
+                                className="p-4 rounded-full bg-red-600 text-white hover:bg-red-500 transition-all shadow-lg hover:shadow-red-600/20 hover:scale-110 active:scale-95"
+                                title="结束会话"
+                            >
+                                <Square size={24} fill="currentColor" />
+                            </button>
+                        </div>
+                    </>
+                ) : (
+                    <div className="text-sm text-gray-500 italic">
+                        {connectionState === ConnectionState.CONNECTING ? "正在建立连接..." : "等待开始..."}
                     </div>
-                </>
-            ) : (
-                <div className="text-sm text-gray-500 italic">
-                    {connectionState === ConnectionState.CONNECTING ? "正在建立连接..." : "等待开始..."}
-                </div>
-            )}
-        </div>
+                )}
+            </div>
+        )}
       </div>
 
       {/* Sidebar: Transcript */}
-      <Transcript 
-        messages={messages} 
-        userProfile={userProfile}
-      />
+      {connectionState !== ConnectionState.DISCONNECTED && (
+          <Transcript 
+            messages={messages} 
+            userProfile={userProfile}
+          />
+      )}
     </div>
   );
 };

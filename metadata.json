@@ -1,6 +1,6 @@
 {
-  "name": "AI 实时解题导师",
-  "description": "实时视频流 AI 辅导应用。将摄像头对准题目，Gemini 会实时讲解并引导你解决问题。",
+  "name": "Live Tutor",
+  "description": "A real-time AI tutor that helps students solve problems using video and audio interaction.",
   "requestFramePermissions": [
     "camera",
     "microphone"
