@@ -1,20 +1,16 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ChatMessage, SavedSession } from '../types';
-import { User, Bot, Send, History, ChevronLeft, Trash2, MessageSquare, Calendar, Paperclip, FileText } from 'lucide-react';
+import { ChatMessage, SavedSession, UserProfile } from '../types';
+import { User, Bot, History, ChevronLeft, Trash2, MessageSquare, Calendar, BookOpen, Lightbulb } from 'lucide-react';
 
 interface TranscriptProps {
   messages: ChatMessage[];
-  onSendMessage: (text: string) => void;
-  onSendFile: (file: File) => void;
-  disabled: boolean;
+  userProfile: UserProfile;
 }
 
 type ViewMode = 'live' | 'history_list' | 'history_detail';
 
-const Transcript: React.FC<TranscriptProps> = ({ messages, onSendMessage, onSendFile, disabled }) => {
+const Transcript: React.FC<TranscriptProps> = ({ messages, userProfile }) => {
   const bottomRef = useRef<HTMLDivElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const [input, setInput] = useState('');
   const [viewMode, setViewMode] = useState<ViewMode>('live');
   const [savedSessions, setSavedSessions] = useState<SavedSession[]>([]);
   const [selectedSession, setSelectedSession] = useState<SavedSession | null>(null);
@@ -62,25 +58,6 @@ const Transcript: React.FC<TranscriptProps> = ({ messages, onSendMessage, onSend
     }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (input.trim() && !disabled) {
-      onSendMessage(input.trim());
-      setInput('');
-    }
-  };
-
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-        onSendFile(file);
-    }
-    // Reset input so the same file can be selected again if needed
-    if (fileInputRef.current) {
-        fileInputRef.current.value = '';
-    }
-  };
-
   // --- Render Components ---
 
   const MessageList = ({ msgs }: { msgs: ChatMessage[] }) => (
@@ -102,7 +79,17 @@ const Transcript: React.FC<TranscriptProps> = ({ messages, onSendMessage, onSend
                 msg.role === 'user' ? 'bg-indigo-600' : 'bg-emerald-600'
               }`}
             >
-              {msg.role === 'user' ? <User size={16} /> : <Bot size={16} />}
+              {msg.role === 'user' ? (
+                userProfile.avatar ? (
+                  <span className="text-lg leading-none select-none" role="img" aria-label="avatar">
+                    {userProfile.avatar}
+                  </span>
+                ) : (
+                  <User size={16} />
+                )
+              ) : (
+                <Bot size={16} />
+              )}
             </div>
             <div
               className={`p-3 rounded-lg text-sm max-w-[85%] ${
@@ -173,49 +160,6 @@ const Transcript: React.FC<TranscriptProps> = ({ messages, onSendMessage, onSend
                 )}
                 <MessageList msgs={messages} />
             </div>
-
-            <div className="p-4 border-t border-gray-800 bg-gray-900">
-                <form onSubmit={handleSubmit} className="flex gap-2 items-center">
-                    {/* File Input (Hidden) */}
-                    <input 
-                        type="file" 
-                        ref={fileInputRef} 
-                        className="hidden" 
-                        accept="image/*,application/pdf"
-                        onChange={handleFileSelect}
-                        disabled={disabled}
-                    />
-                    
-                    {/* File Button */}
-                    <button
-                        type="button"
-                        onClick={() => fileInputRef.current?.click()}
-                        disabled={disabled}
-                        className="p-3 bg-gray-800 text-gray-400 rounded-full hover:bg-gray-700 hover:text-indigo-400 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                        title="上传图片或PDF"
-                    >
-                        <Paperclip size={18} />
-                    </button>
-
-                    <div className="relative flex-1">
-                        <input
-                            type="text"
-                            value={input}
-                            onChange={(e) => setInput(e.target.value)}
-                            disabled={disabled}
-                            placeholder={disabled ? "请先连接..." : "输入消息..."}
-                            className="w-full bg-gray-800 text-white placeholder-gray-500 rounded-full py-3 pl-4 pr-12 focus:outline-none focus:ring-2 focus:ring-indigo-500 border border-gray-700 disabled:opacity-50 disabled:cursor-not-allowed text-sm transition-all"
-                        />
-                        <button
-                            type="submit"
-                            disabled={!input.trim() || disabled}
-                            className="absolute right-2 top-1/2 transform -translate-y-1/2 p-2 bg-indigo-600 text-white rounded-full hover:bg-indigo-500 disabled:opacity-50 disabled:hover:bg-indigo-600 transition-colors"
-                        >
-                            <Send size={16} />
-                        </button>
-                    </div>
-                </form>
-            </div>
         </>
       )}
 
@@ -250,11 +194,22 @@ const Transcript: React.FC<TranscriptProps> = ({ messages, onSendMessage, onSend
                              </button>
                         </div>
                         <p className="text-sm text-gray-300 line-clamp-2">
-                            {session.preview || "（无文本内容）"}
+                            {session.summary?.overview 
+                                ? <span className="text-emerald-300 font-medium">【总结】{session.summary.overview.slice(0, 30)}...</span>
+                                : (session.preview || "（无文本内容）")
+                            }
                         </p>
-                        <div className="mt-3 flex items-center gap-2 text-xs text-gray-500">
-                             <MessageSquare size={12} />
-                             <span>{session.messages.length} 条对话</span>
+                        <div className="mt-3 flex items-center justify-between">
+                            <div className="flex items-center gap-2 text-xs text-gray-500">
+                                <MessageSquare size={12} />
+                                <span>{session.messages.length} 条对话</span>
+                            </div>
+                            {session.summary && (
+                                <div className="flex items-center gap-1 text-xs text-emerald-500/80 bg-emerald-500/10 px-2 py-0.5 rounded">
+                                    <BookOpen size={12} />
+                                    <span>含学习报告</span>
+                                </div>
+                            )}
                         </div>
                     </div>
                 ))
@@ -267,6 +222,33 @@ const Transcript: React.FC<TranscriptProps> = ({ messages, onSendMessage, onSend
                <div className="bg-gray-800/50 p-2 text-center text-xs text-gray-400 border-b border-gray-700/50">
                   {new Date(selectedSession.timestamp).toLocaleString('zh-CN')}
                </div>
+               
+               {/* Summary Card in History View */}
+               {selectedSession.summary && (
+                   <div className="m-4 p-4 bg-gradient-to-br from-gray-800 to-gray-900 border border-indigo-500/20 rounded-xl shadow-lg">
+                       <h3 className="text-sm font-bold text-indigo-300 mb-3 flex items-center gap-2">
+                           <BookOpen size={16} /> 学习报告
+                       </h3>
+                       
+                       <div className="mb-3">
+                           <h4 className="text-xs font-semibold text-gray-400 mb-1 uppercase">概览</h4>
+                           <p className="text-sm text-gray-300 leading-relaxed">{selectedSession.summary.overview}</p>
+                       </div>
+                       
+                       <div>
+                           <h4 className="text-xs font-semibold text-gray-400 mb-1 uppercase">知识点</h4>
+                           <ul className="space-y-1">
+                               {selectedSession.summary.knowledgePoints.map((point, i) => (
+                                   <li key={i} className="flex gap-2 items-start text-sm text-gray-300">
+                                       <Lightbulb size={14} className="text-emerald-500 mt-0.5 flex-shrink-0" />
+                                       <span>{point}</span>
+                                   </li>
+                               ))}
+                           </ul>
+                       </div>
+                   </div>
+               )}
+
                <MessageList msgs={selectedSession.messages} />
           </div>
       )}

@@ -1,6 +1,6 @@
 {
-  "name": "Copy of AI 实时解题导师",
-  "description": "实时视频流 AI 辅导应用。将摄像头对准题目，Gemini 会实时讲解。",
+  "name": "AI 实时解题导师",
+  "description": "实时视频流 AI 辅导应用。将摄像头对准题目，Gemini 会实时讲解并引导你解决问题。",
   "requestFramePermissions": [
     "camera",
     "microphone"

@@ -1,13 +1,81 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { GoogleGenAI, LiveServerMessage, Modality } from '@google/genai';
-import { Video, Mic, MicOff, Play, Square, AlertCircle, Volume2, Sparkles, Eye, Settings, VolumeX, RefreshCw, Camera, FlipHorizontal, Lightbulb, Key, X, MessageCircleQuestion, ArrowRight, ScanEye, Target, UserRoundPen, Check, ChevronRight } from 'lucide-react';
-import { ConnectionState, ChatMessage, SavedSession, UserProfile } from '../types';
+import { GoogleGenAI, LiveServerMessage, Modality, Type } from '@google/genai';
+import { Video, Mic, MicOff, Play, Square, AlertCircle, Volume2, Sparkles, Eye, Settings, VolumeX, RefreshCw, Camera, FlipHorizontal, Lightbulb, Key, X, MessageCircleQuestion, ArrowRight, ScanEye, Target, UserRoundPen, Check, ChevronRight, Gauge, Save, AudioLines, Wifi, WifiOff, FileText, Loader2, BookOpen } from 'lucide-react';
+import { ConnectionState, ChatMessage, SavedSession, UserProfile, SessionSummary } from '../types';
 import { createPcmBlob, decode, decodeAudioData, blobToBase64 } from '../utils/audioUtils';
 import AudioVisualizer from './AudioVisualizer';
 import Transcript from './Transcript';
+import DiagramBoard, { DiagramData } from './DiagramBoard';
+import * as pdfjsLib from 'pdfjs-dist';
+
+// Set worker source for PDF.js
+pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
+
+// Extend Navigator interface for Network Information API (experimental)
+interface NetworkInformation extends EventTarget {
+  readonly downlink: number;
+  readonly effectiveType: 'slow-2g' | '2g' | '3g' | '4g';
+  readonly rtt: number;
+  readonly saveData: boolean;
+  onchange: EventListener;
+}
 
 // Configuration constants
-const MODEL_NAME = 'gemini-2.5-flash-native-audio-preview-12-2025';
+const MODEL_NAME = 'gemini-2.5-flash-native-audio-preview-09-2025';
+
+// Voice Options for User Selection
+const VOICE_OPTIONS = [
+  { id: 'Kore', name: '温柔老师 (Kore)', desc: '舒缓、平和的女性声音', gender: 'Female' },
+  { id: 'Aoede', name: '知性姐姐 (Aoede)', desc: '清晰、专业的女性声音', gender: 'Female' },
+  { id: 'Fenrir', name: '阳光哥哥 (Fenrir)', desc: '充满活力、热情的男性声音', gender: 'Male' },
+  { id: 'Charon', name: '沉稳大叔 (Charon)', desc: '低沉、有磁性的男性声音', gender: 'Male' },
+  { id: 'Puck', name: '幽默伙伴 (Puck)', desc: '轻松、略带调皮的男性声音', gender: 'Male' },
+];
+
+// Tool Declaration for Diagramming
+const drawDiagramTool = {
+  functionDeclarations: [
+    {
+      name: "draw_diagram",
+      description: "Draw a simple 2D diagram (geometry, physics, chemistry) to visualize a concept. Use this when a visual aid would help the student understand.",
+      parameters: {
+        type: Type.OBJECT,
+        properties: {
+          title: { type: Type.STRING, description: "Title of the diagram" },
+          description: { type: Type.STRING, description: "Short description of what this diagram shows" },
+          viewBox: { type: Type.STRING, description: "SVG viewBox, e.g., '0 0 400 300'" },
+          shapes: {
+            type: Type.ARRAY,
+            description: "List of shapes to draw",
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                id: { type: Type.STRING, description: "Unique ID for the shape" },
+                type: { type: Type.STRING, description: "Type of shape: 'line', 'circle', 'rect', 'text', 'polygon', 'arrow'" },
+                x: { type: Type.NUMBER },
+                y: { type: Type.NUMBER },
+                x1: { type: Type.NUMBER },
+                y1: { type: Type.NUMBER },
+                x2: { type: Type.NUMBER },
+                y2: { type: Type.NUMBER },
+                r: { type: Type.NUMBER },
+                width: { type: Type.NUMBER },
+                height: { type: Type.NUMBER },
+                points: { type: Type.STRING, description: "Points for polygon, e.g., '0,0 100,0 50,100'" },
+                content: { type: Type.STRING, description: "Text content" },
+                color: { type: Type.STRING, description: "Stroke color (hex or name)" },
+                fill: { type: Type.STRING, description: "Fill color (hex or name)" },
+                label: { type: Type.STRING, description: "Label text for the shape" }
+              },
+              required: ["id", "type"]
+            }
+          }
+        },
+        required: ["title", "shapes"]
+      }
+    }
+  ]
+};
 
 // Base instruction without user context
 const BASE_SYSTEM_INSTRUCTION = `
@@ -39,11 +107,19 @@ Interaction Protocol:
 6. **Language**: Speak in Chinese (Mandarin) unless the user speaks to you in another language.
 7. **Tone**: Be supportive, patient, and concise. Celebrate small wins when the user gets a step right.
 
-8. **Text Input Handling**: If the user sends a text message or question (e.g. via the chat input), YOU MUST RESPOND TO IT IMMEDIATELY. Do not ignore text input. You can combine text questions with visual context if relevant.
+8. **Closing & Confirmation (MANDATORY)**:
+   - **Scenario A (Explanation Finished)**: When you finish explaining a concept, DO NOT stop silently. You MUST ask: "这道题你现在真的弄懂了吗？" (Do you really understand this problem now?).
+   - **Scenario B (User Gets Answer Right)**: When the user calculates or states the correct answer, acknowledge it (e.g., "对了!"), but IMMEDIATELY follow up with a deep-dive check: "答案是对的，但这道题的原理你真的完全弄懂了吗？" or "你能再跟我讲一遍为什么选这个吗？我想确认你真的懂了。"
+   - **Goal**: Ensure deep understanding, not just correct answers.
+
+9. **Text Input Handling**: If the user sends a text message or question (e.g. via the chat input), YOU MUST RESPOND TO IT IMMEDIATELY. Do not ignore text input. You can combine text questions with visual context if relevant.
+
+10. **Strict Scope Enforcement**: You are strictly a learning assistant. Do NOT discuss topics unrelated to education, learning, or problem-solving. If a user asks about non-learning topics (e.g., weather, jokes, news, personal life), politely redirect them: "我只负责学习辅导哦，让我们回到题目上来吧。"
+
+11. **Visual Aids**: Use the 'draw_diagram' tool whenever a visual explanation would be helpful (e.g., geometry figures, force diagrams, circuit diagrams). Explain what you are drawing while you draw it.
 `;
 
-const AVATAR_OPTIONS = ['🎓', '🚀', '🌟', '🐶', '🐱', '🦊', '🐯', '🐼', '🧠', '💡'];
-const FRAME_RATE = 2; // Frames per second sent to model (0.5s interval)
+const AVATAR_OPTIONS = ['🎓', '🚀', '🌟', '🐶', '🐱', '🦊', '🐯', '🐼', '🧠', '💡', '🎨', '⚽', '🎵', '🎮', '📚', '🤖', '🦖', '🦄', '🐝', '🐢'];
 const PCM_SAMPLE_RATE = 16000; // Input sample rate
 const OUTPUT_SAMPLE_RATE = 24000; // Output sample rate
 
@@ -54,22 +130,39 @@ const LiveTutor: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   
   // Profile State
-  const [userProfile, setUserProfile] = useState<UserProfile>({ name: '', age: '', avatar: '🎓' });
+  const [userProfile, setUserProfile] = useState<UserProfile>({ 
+      name: '', 
+      age: '', 
+      avatar: '🎓',
+      voiceName: 'Kore' // Default voice
+  });
   const [showProfileModal, setShowProfileModal] = useState(false);
 
-  // Insight State
+  // Insight & Summary State
   const [insightData, setInsightData] = useState<{ knowledge: string | null; eye: string | null }>({ knowledge: null, eye: null });
   const [activePopup, setActivePopup] = useState<{ type: 'knowledge' | 'eye'; content: string } | null>(null);
+  const [sessionSummary, setSessionSummary] = useState<SessionSummary | null>(null);
+  const [showSummaryModal, setShowSummaryModal] = useState(false);
+  const [isGeneratingSummary, setIsGeneratingSummary] = useState(false);
+  const [diagramData, setDiagramData] = useState<DiagramData | null>(null);
+  
   const [showBlurWarning, setShowBlurWarning] = useState(false);
   const [scannerActive, setScannerActive] = useState(false);
+  const [showSaveConfirm, setShowSaveConfirm] = useState(false);
 
-  // Media State
+  // Media & Network State
   const [isMicMuted, setIsMicMuted] = useState(false);
   const [isSpeakerMuted, setIsSpeakerMuted] = useState(false);
-  const [isVideoMirrored, setIsVideoMirrored] = useState(true); // Default mirror for selfie feel
+  const [isVideoMirrored, setIsVideoMirrored] = useState(true); 
   const [videoDevices, setVideoDevices] = useState<MediaDeviceInfo[]>([]);
   const [selectedCameraId, setSelectedCameraId] = useState<string>('');
   const [showSettings, setShowSettings] = useState(false);
+  
+  // Adaptive Quality State
+  const [videoFrameRate, setVideoFrameRate] = useState<number>(2); // Default 2 FPS
+  const [videoQuality, setVideoQuality] = useState<number>(0.6); // Default JPEG quality 0.6
+  const [isAutoQuality, setIsAutoQuality] = useState<boolean>(true);
+  const [networkStatus, setNetworkStatus] = useState<'good' | 'moderate' | 'poor' | 'unknown'>('unknown');
 
   const [isBotSpeaking, setIsBotSpeaking] = useState(false);
   const [inputAnalyser, setInputAnalyser] = useState<AnalyserNode | null>(null);
@@ -79,7 +172,7 @@ const LiveTutor: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const sessionPromiseRef = useRef<Promise<any> | null>(null);
   const messagesRef = useRef<ChatMessage[]>([]); 
-  const hasSavedRef = useRef<boolean>(false);
+  const currentSessionIdRef = useRef<string | null>(null);
   const blurTimeoutRef = useRef<number | null>(null);
   const scannerTimeoutRef = useRef<number | null>(null);
   
@@ -96,12 +189,60 @@ const LiveTutor: React.FC = () => {
     messagesRef.current = messages;
   }, [messages]);
 
+  // Network Monitoring Effect
+  useEffect(() => {
+    if (!isAutoQuality) {
+        setNetworkStatus('unknown');
+        return;
+    }
+
+    const nav = navigator as any;
+    const connection: NetworkInformation | undefined = nav.connection || nav.mozConnection || nav.webkitConnection;
+
+    if (!connection) {
+        console.warn("Network Information API not supported.");
+        setNetworkStatus('unknown');
+        return;
+    }
+
+    const updateQuality = () => {
+        const { downlink, rtt } = connection;
+        // console.debug(`Network Change: ${downlink}Mbps, RTT: ${rtt}ms`);
+
+        if (downlink < 1.5 || rtt > 500) {
+            // Poor connection
+            setVideoFrameRate(0.5); // 1 frame every 2 seconds
+            setVideoQuality(0.4);   // Higher compression
+            setNetworkStatus('poor');
+        } else if (downlink < 5 || rtt > 150) {
+            // Moderate connection
+            setVideoFrameRate(1.5);
+            setVideoQuality(0.5);
+            setNetworkStatus('moderate');
+        } else {
+            // Good connection
+            setVideoFrameRate(2.5);
+            setVideoQuality(0.65);
+            setNetworkStatus('good');
+        }
+    };
+
+    connection.addEventListener('change', updateQuality);
+    updateQuality(); // Initial check
+
+    return () => connection.removeEventListener('change', updateQuality);
+  }, [isAutoQuality]);
+
   // Load Profile on Mount
   useEffect(() => {
       try {
           const savedProfile = localStorage.getItem('user_profile');
           if (savedProfile) {
-              setUserProfile(JSON.parse(savedProfile));
+              const parsed = JSON.parse(savedProfile);
+              setUserProfile({
+                  ...parsed,
+                  voiceName: parsed.voiceName || 'Kore'
+              });
           }
       } catch (e) {
           console.error("Failed to load profile", e);
@@ -139,7 +280,6 @@ const LiveTutor: React.FC = () => {
         });
 
         // 2. Detect Pointing/Gestures
-        // Keywords: finger, pointing, pointing at, pen, see your finger, etc.
         const gestureKeywords = /(?:手指|指着|指向|看这里|pointing at|your finger|this area|circled|highlighted|笔)/i;
         if (gestureKeywords.test(text)) {
              setScannerActive(true);
@@ -148,17 +288,12 @@ const LiveTutor: React.FC = () => {
         }
 
         // 3. Detect Blurry/Adjustment requests
-        // Keywords: blurry, unclear, can't see, adjust camera, focus
         const blurKeywords = /(?:看不清|模糊|调整.*摄像头|太远|太小|拿近|unclear|blurry|too far|adjust.*camera)/i;
         if (blurKeywords.test(text)) {
             setShowBlurWarning(true);
-            
-            // Clear previous timeout if exists to reset the timer
             if (blurTimeoutRef.current) {
                 clearTimeout(blurTimeoutRef.current);
             }
-            
-            // Auto hide after 6 seconds
             blurTimeoutRef.current = window.setTimeout(() => {
                 setShowBlurWarning(false);
             }, 6000);
@@ -175,10 +310,8 @@ const LiveTutor: React.FC = () => {
         const cameras = devices.filter(d => d.kind === 'videoinput');
         setVideoDevices(cameras);
         if (cameras.length > 0) {
-            // Prefer back camera if available on mobile, else first one
             const backCamera = cameras.find(c => c.label.toLowerCase().includes('back') || c.label.toLowerCase().includes('environment'));
             setSelectedCameraId(backCamera ? backCamera.deviceId : cameras[0].deviceId);
-            // If back camera, default to NOT mirrored
             if (backCamera) setIsVideoMirrored(false);
         }
       } catch (e) {
@@ -191,7 +324,6 @@ const LiveTutor: React.FC = () => {
   // Handle Speaker Mute Toggle
   useEffect(() => {
     if (outputNodeRef.current) {
-        // Smooth transition
         const currentTime = outputContextRef.current?.currentTime || 0;
         outputNodeRef.current.gain.cancelScheduledValues(currentTime);
         outputNodeRef.current.gain.setTargetAtTime(isSpeakerMuted ? 0 : 1, currentTime, 0.1);
@@ -201,26 +333,18 @@ const LiveTutor: React.FC = () => {
   // Handle Camera Switch during active session
   const switchCamera = async (deviceId: string) => {
     setSelectedCameraId(deviceId);
-    
-    // If we have an active video element, restart the stream
     if (videoRef.current && connectionState === ConnectionState.CONNECTED) {
         try {
-            // Stop old tracks
             const oldStream = videoRef.current.srcObject as MediaStream;
             if (oldStream) {
                 oldStream.getVideoTracks().forEach(t => t.stop());
             }
-
-            // Start new stream
             const newStream = await navigator.mediaDevices.getUserMedia({
                 video: { deviceId: { exact: deviceId }, width: 1280, height: 720 },
-                audio: false // Audio is handled separately
+                audio: false 
             });
-            
             videoRef.current.srcObject = newStream;
             await videoRef.current.play();
-            
-            // Re-bind audio stream to input context if needed (usually audio device doesn't change with camera)
         } catch (e) {
             console.error("Failed to switch camera", e);
             setError("切换摄像头失败");
@@ -241,33 +365,111 @@ const LiveTutor: React.FC = () => {
     });
   }, []);
 
+  // --- Generate Summary Function ---
+  const generateSessionSummary = async (msgs: ChatMessage[]) => {
+      if (msgs.length < 2 || !process.env.API_KEY) return;
+      
+      setIsGeneratingSummary(true);
+      setShowSummaryModal(true); // Open modal immediately to show loading state
+
+      try {
+          const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+          const transcript = msgs.map(m => `${m.role === 'user' ? '学生' : '老师'}: ${m.text}`).join('\n');
+          
+          const response = await ai.models.generateContent({
+              model: 'gemini-2.5-flash',
+              contents: `请根据以下师生辅导对话内容，生成一份学习总结。
+              1. 简要概括今天学习了什么题目或内容 (Overview)。
+              2. 列出具体的知识点、公式或核心概念 (Knowledge Points)。
+              
+              对话内容：
+              ${transcript}`,
+              config: {
+                  responseMimeType: "application/json",
+                  responseSchema: {
+                    type: Type.OBJECT,
+                    properties: {
+                        overview: { type: Type.STRING, description: "本次辅导内容的简要总结" },
+                        knowledgePoints: {
+                            type: Type.ARRAY,
+                            items: { type: Type.STRING },
+                            description: "涉及的具体知识点列表"
+                        }
+                    },
+                    required: ["overview", "knowledgePoints"]
+                  }
+              }
+          });
+
+          if (response.text) {
+              const summary: SessionSummary = JSON.parse(response.text);
+              setSessionSummary(summary);
+              return summary;
+          }
+      } catch (e) {
+          console.error("Failed to generate summary", e);
+      } finally {
+          setIsGeneratingSummary(false);
+      }
+  };
+
   // --- Save Session Logic ---
-  const saveSessionToHistory = useCallback(() => {
-    if (messagesRef.current.length === 0 || hasSavedRef.current) return;
+  const saveSessionToHistory = useCallback((manual: boolean = false, explicitSummary?: SessionSummary) => {
+    if (messagesRef.current.length === 0) return;
     try {
         const historyData = localStorage.getItem('tutoring_history');
-        const history: SavedSession[] = historyData ? JSON.parse(historyData) : [];
+        let history: SavedSession[] = historyData ? JSON.parse(historyData) : [];
         const firstUserMsg = messagesRef.current.find(m => m.role === 'user');
         const preview = firstUserMsg 
             ? (firstUserMsg.text.slice(0, 40) + (firstUserMsg.text.length > 40 ? '...' : ''))
             : '无内容会话';
-        const newSession: SavedSession = {
-            id: Date.now().toString(),
-            timestamp: Date.now(),
-            preview,
-            messages: messagesRef.current
-        };
-        const updatedHistory = [newSession, ...history];
-        localStorage.setItem('tutoring_history', JSON.stringify(updatedHistory));
-        hasSavedRef.current = true;
+        
+        // Use provided summary or existing state
+        const summaryToSave = explicitSummary || sessionSummary || undefined;
+
+        if (currentSessionIdRef.current) {
+             history = history.map(s => 
+                s.id === currentSessionIdRef.current 
+                ? { 
+                    ...s, 
+                    messages: messagesRef.current, 
+                    preview, 
+                    timestamp: Date.now(),
+                    summary: summaryToSave 
+                  } 
+                : s
+            );
+        } else {
+            const newId = Date.now().toString();
+            currentSessionIdRef.current = newId;
+            const newSession: SavedSession = {
+                id: newId,
+                timestamp: Date.now(),
+                preview,
+                messages: messagesRef.current,
+                summary: summaryToSave
+            };
+            history = [newSession, ...history];
+        }
+
+        localStorage.setItem('tutoring_history', JSON.stringify(history));
+        
+        if (manual) {
+            setShowSaveConfirm(true);
+            setTimeout(() => setShowSaveConfirm(false), 2000);
+        }
     } catch (e) {
         console.error("Failed to save session history", e);
     }
-  }, []);
+  }, [sessionSummary]);
 
   // --- Cleanup Function ---
   const stopSession = useCallback(async () => {
-    saveSessionToHistory();
+    // Generate summary first if we have meaningful conversation
+    const currentMessages = messagesRef.current;
+    let generatedSummary: SessionSummary | undefined;
+    
+    // Stop AV first
     if (frameIntervalRef.current) {
       clearInterval(frameIntervalRef.current);
       frameIntervalRef.current = null;
@@ -289,7 +491,50 @@ const LiveTutor: React.FC = () => {
     setActivePopup(null);
     setShowBlurWarning(false);
     setScannerActive(false);
+
+    // Now generate summary and save
+    if (currentMessages.length >= 2) {
+        generatedSummary = await generateSessionSummary(currentMessages) || undefined;
+    }
+    
+    saveSessionToHistory(false, generatedSummary);
+    
+    currentSessionIdRef.current = null;
+    // Don't clear summary state immediately so user can see the modal
   }, [saveSessionToHistory]);
+
+  // --- Helper: Video Streaming ---
+  const startVideoStreaming = useCallback((sessionPromise: Promise<any>) => {
+    if (frameIntervalRef.current) clearInterval(frameIntervalRef.current);
+    frameIntervalRef.current = window.setInterval(() => {
+        if (!videoRef.current || !canvasRef.current) return;
+        const video = videoRef.current;
+        const canvas = canvasRef.current;
+        const ctx = canvas.getContext('2d');
+        if (!ctx || video.readyState < 2) return;
+        
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        ctx.drawImage(video, 0, 0);
+        
+        // Dynamic Quality Used Here
+        canvas.toBlob(async (blob) => {
+            if (blob) {
+                const base64 = await blobToBase64(blob);
+                sessionPromise.then(session => {
+                    session.sendRealtimeInput({ media: { mimeType: 'image/jpeg', data: base64 } });
+                });
+            }
+        }, 'image/jpeg', videoQuality); // Use state for quality
+    }, 1000 / videoFrameRate); // Use state for FPS
+  }, [videoFrameRate, videoQuality]);
+
+  // Update video streaming interval if frame rate/quality changes while connected
+  useEffect(() => {
+    if (connectionState === ConnectionState.CONNECTED && sessionPromiseRef.current) {
+        startVideoStreaming(sessionPromiseRef.current);
+    }
+  }, [videoFrameRate, videoQuality, connectionState, startVideoStreaming]);
 
   // --- Start Function ---
   const startSession = async () => {
@@ -297,13 +542,15 @@ const LiveTutor: React.FC = () => {
       setConnectionState(ConnectionState.CONNECTING);
       setError(null);
       setMessages([]);
-      setInsightData({ knowledge: null, eye: null }); // Clear insights on start
+      setInsightData({ knowledge: null, eye: null });
       setActivePopup(null);
+      setSessionSummary(null); // Clear previous summary
+      setShowSummaryModal(false);
       setShowBlurWarning(false);
       setScannerActive(false);
-      hasSavedRef.current = false;
+      currentSessionIdRef.current = null;
 
-      // 1. Setup Camera (Use selected ID)
+      // 1. Setup Camera
       const constraints: MediaStreamConstraints = {
           video: selectedCameraId ? { deviceId: { exact: selectedCameraId }, width: 1280, height: 720 } : { width: 1280, height: 720 },
           audio: true
@@ -325,22 +572,43 @@ const LiveTutor: React.FC = () => {
       inputContextRef.current = new AudioContext({ sampleRate: PCM_SAMPLE_RATE });
       outputContextRef.current = new AudioContext({ sampleRate: OUTPUT_SAMPLE_RATE });
       
-      // Gain Node for Speaker Mute
       outputNodeRef.current = outputContextRef.current.createGain();
       outputNodeRef.current.gain.value = isSpeakerMuted ? 0 : 1;
       outputNodeRef.current.connect(outputContextRef.current.destination);
       
       nextStartTimeRef.current = 0;
 
-      // 4. Construct System Instruction with Profile
+      // 4. Construct System Instruction
       let currentSystemInstruction = BASE_SYSTEM_INSTRUCTION;
       if (userProfile.name) {
-          currentSystemInstruction += `\n9. **Student Profile**: The student's name is "${userProfile.name}". Use their name occasionally to be friendly.`;
+          currentSystemInstruction += `\n11. **Student Profile**: The student's name is "${userProfile.name}". Use their name occasionally to be friendly.`;
       }
       if (userProfile.age) {
-          currentSystemInstruction += `\n10. **Age Appropriateness**: The student is ${userProfile.age} years old. ADJUST YOUR EXPLANATION COMPLEXITY AND TONE TO MATCH A ${userProfile.age}-YEAR-OLD CHILD.`;
+          currentSystemInstruction += `\n12. **Age Appropriateness**: The student is ${userProfile.age} years old. ADJUST YOUR EXPLANATION COMPLEXITY AND TONE TO MATCH A ${userProfile.age}-YEAR-OLD CHILD.`;
       } else {
-          currentSystemInstruction += `\n10. **Age Appropriateness**: Assume the student is a middle school student. Explain concepts clearly and simply.`;
+          currentSystemInstruction += `\n12. **Age Appropriateness**: Assume the student is a middle school student. Explain concepts clearly and simply.`;
+      }
+
+      // Inject Past History Context
+      try {
+          const historyData = localStorage.getItem('tutoring_history');
+          if (historyData) {
+              const history: SavedSession[] = JSON.parse(historyData);
+              // Take the last 5 sessions to keep context manageable
+              const recentHistory = history.slice(0, 5).map(s => {
+                  const date = new Date(s.timestamp).toLocaleDateString();
+                  const summary = s.summary 
+                      ? `Topic: ${s.summary.overview}, Key Points: ${s.summary.knowledgePoints.join(', ')}`
+                      : `Content Preview: ${s.preview}`;
+                  return `- [${date}]: ${summary}`;
+              }).join('\n');
+
+              if (recentHistory) {
+                  currentSystemInstruction += `\n\n13. **Past Learning Context**: Here is a summary of the student's recent learning history. USE THIS to make connections (e.g., "Remember when we learned about [Topic] last time? This is similar...").\n${recentHistory}`;
+              }
+          }
+      } catch (e) {
+          console.error("Failed to load history for context", e);
       }
 
       // 5. Connect to Gemini Live
@@ -351,14 +619,20 @@ const LiveTutor: React.FC = () => {
           systemInstruction: currentSystemInstruction,
           inputAudioTranscription: {},
           outputAudioTranscription: {},
-          speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } } },
+          tools: [drawDiagramTool], // Enable the tool
+          speechConfig: { 
+            voiceConfig: { 
+                prebuiltVoiceConfig: { 
+                    voiceName: userProfile.voiceName || 'Kore' 
+                } 
+            } 
+          },
         },
         callbacks: {
           onopen: () => {
             console.log('Gemini Live Connection Opened');
             setConnectionState(ConnectionState.CONNECTED);
             
-            // Start Audio Streaming (Microphone)
             if (!inputContextRef.current) return;
             const source = inputContextRef.current.createMediaStreamSource(stream);
             
@@ -378,7 +652,6 @@ const LiveTutor: React.FC = () => {
             source.connect(processor);
             processor.connect(inputContextRef.current.destination);
 
-            // Start Video Streaming
             startVideoStreaming(sessionPromise);
           },
           onmessage: async (msg: LiveServerMessage) => {
@@ -391,6 +664,41 @@ const LiveTutor: React.FC = () => {
               if (text) updateTranscript('model', text, false);
             }
             if (msg.serverContent?.turnComplete) setIsBotSpeaking(false);
+
+            // Handle Tool Calls
+            if (msg.toolCall) {
+                const functionCalls = msg.toolCall.functionCalls;
+                if (functionCalls) {
+                    const responses = functionCalls.map(call => {
+                        if (call.name === 'draw_diagram') {
+                            try {
+                                const args = call.args as unknown as DiagramData;
+                                console.log("Diagram Tool Called:", args);
+                                setDiagramData(args);
+                                return {
+                                    id: call.id,
+                                    name: call.name,
+                                    response: { result: "Diagram displayed successfully." }
+                                };
+                            } catch (e) {
+                                console.error("Error processing diagram tool:", e);
+                                return {
+                                    id: call.id,
+                                    name: call.name,
+                                    response: { error: "Failed to render diagram." }
+                                };
+                            }
+                        }
+                        return {
+                            id: call.id,
+                            name: call.name,
+                            response: { result: "Function not implemented" }
+                        };
+                    });
+                    
+                    sessionPromise.then(session => session.sendToolResponse({ functionResponses: responses }));
+                }
+            }
 
             const audioData = msg.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
             if (audioData && outputContextRef.current && outputNodeRef.current) {
@@ -422,7 +730,7 @@ const LiveTutor: React.FC = () => {
           },
           onerror: (err) => {
             console.error('Gemini Error:', err);
-            setError("连接发生错误，请重试。");
+            setError(err instanceof Error ? err.message : "连接发生错误，请重试。");
             setConnectionState(ConnectionState.ERROR);
           }
         }
@@ -437,39 +745,10 @@ const LiveTutor: React.FC = () => {
     }
   };
 
-  const startVideoStreaming = (sessionPromise: Promise<any>) => {
-    if (frameIntervalRef.current) clearInterval(frameIntervalRef.current);
-    frameIntervalRef.current = window.setInterval(() => {
-        if (!videoRef.current || !canvasRef.current) return;
-        const video = videoRef.current;
-        const canvas = canvasRef.current;
-        const ctx = canvas.getContext('2d');
-        if (!ctx || video.readyState < 2) return;
-        
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        // Important: Draw the video exactly as is (raw). 
-        // We do NOT apply the mirror transform to the canvas sent to AI, only to the UI video element.
-        ctx.drawImage(video, 0, 0);
-        
-        canvas.toBlob(async (blob) => {
-            if (blob) {
-                const base64 = await blobToBase64(blob);
-                sessionPromise.then(session => {
-                    session.sendRealtimeInput({ media: { mimeType: 'image/jpeg', data: base64 } });
-                });
-            }
-        }, 'image/jpeg', 0.6);
-    }, 1000 / FRAME_RATE);
-  };
-
-  const handleSendMessage = useCallback((text: string) => {
+  const handleSendMessage = useCallback((text: string, displayOverride?: string) => {
     if (!sessionPromiseRef.current) return;
-    updateTranscript('user', text, true);
+    updateTranscript('user', displayOverride || text, true);
     sessionPromiseRef.current.then(session => {
-        // Safe check for send method. If unavailable, we prevent crash.
-        // The error "session.send is not a function" typically means the method doesn't exist on this SDK version/build.
-        // We use 'as any' to bypass TS check and runtime check to avoid crash.
         const s = session as any;
         if (typeof s.send === 'function') {
             s.send({
@@ -478,8 +757,6 @@ const LiveTutor: React.FC = () => {
                      turnComplete: true
                  }
             });
-        } else {
-            console.warn("session.send is not available in this SDK version. Text message not sent to model.");
         }
     }).catch(err => console.error("Failed to send text message:", err));
   }, [updateTranscript]);
@@ -490,25 +767,68 @@ const LiveTutor: React.FC = () => {
         alert("文件大小不能超过 5MB");
         return;
     }
-
     try {
-        const base64 = await blobToBase64(file);
-        const mimeType = file.type;
-        const msgText = `[用户上传了文件: ${file.name}]`;
-        
-        updateTranscript('user', msgText, true);
+        const isImage = file.type.startsWith('image/');
+        const isText = file.type.startsWith('text/') || file.name.endsWith('.txt') || file.name.endsWith('.md') || file.name.endsWith('.json');
+        const isPdf = file.type === 'application/pdf' || file.name.endsWith('.pdf');
 
-        sessionPromiseRef.current.then(session => {
-             // Use sendRealtimeInput for image data - this is the supported method for Live API media
-             session.sendRealtimeInput({ 
-                 media: { mimeType, data: base64 } 
-             });
-        });
+        if (isPdf) {
+            const arrayBuffer = await file.arrayBuffer();
+            const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+            let fullText = '';
+            
+            for (let i = 1; i <= pdf.numPages; i++) {
+                const page = await pdf.getPage(i);
+                const textContent = await page.getTextContent();
+                const pageText = textContent.items.map((item: any) => item.str).join(' ');
+                fullText += `Page ${i}:\n${pageText}\n\n`;
+            }
+
+            const messageText = `[用户上传了PDF文件: ${file.name}]\n${fullText}`;
+            const displayText = `[用户上传了PDF文件: ${file.name}]`;
+            handleSendMessage(messageText, displayText);
+            return;
+        }
+
+        if (isText) {
+             const text = await file.text();
+             const fullText = `[用户上传了文本文件: ${file.name}]\n${text}`;
+             const displayText = `[用户上传了文本文件: ${file.name}]`;
+             handleSendMessage(fullText, displayText);
+             return;
+        }
+
+        if (isImage) {
+            const base64 = await blobToBase64(file);
+            const mimeType = file.type;
+            const msgText = `[用户上传了图片: ${file.name}]`;
+            updateTranscript('user', msgText, true);
+            
+            sessionPromiseRef.current.then(session => {
+                 session.sendRealtimeInput({ media: { mimeType, data: base64 } });
+                 
+                 // Trigger response
+                 const s = session as any;
+                 if (typeof s.send === 'function') {
+                     setTimeout(() => {
+                         s.send({
+                              clientContent: {
+                                  turns: [{ role: 'user', parts: [{ text: `我上传了一张图片 (${file.name})，请帮我看看。` }] }],
+                                  turnComplete: true
+                              }
+                         });
+                     }, 200);
+                 }
+            });
+            return;
+        }
+
+        alert("目前仅支持图片和文本文件");
     } catch (e) {
         console.error("File upload failed", e);
         alert("文件处理失败");
     }
-  }, [updateTranscript]);
+  }, [handleSendMessage, updateTranscript]);
 
   const handleAskExplain = () => {
       if (!activePopup) return;
@@ -710,6 +1030,91 @@ const LiveTutor: React.FC = () => {
                 </div>
             )}
 
+            {/* Session Summary Modal */}
+            {showSummaryModal && (
+                <div className="absolute inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-md animate-in fade-in duration-300">
+                    <div className="bg-gray-900 border border-indigo-500/30 w-full max-w-lg rounded-2xl shadow-2xl overflow-hidden animate-in zoom-in-95 duration-300 flex flex-col max-h-[80vh]">
+                        {/* Header */}
+                        <div className="p-5 border-b border-gray-700/50 bg-gradient-to-r from-indigo-900/40 to-gray-900 flex justify-between items-center">
+                            <div className="flex items-center gap-3">
+                                <div className="bg-indigo-600 p-2 rounded-lg shadow-lg shadow-indigo-600/20">
+                                    <BookOpen size={24} className="text-white" />
+                                </div>
+                                <div>
+                                    <h3 className="font-bold text-xl text-white">今日学习报告</h3>
+                                    <p className="text-xs text-indigo-300">AI 智能生成的辅导总结</p>
+                                </div>
+                            </div>
+                            <button 
+                                onClick={() => setShowSummaryModal(false)} 
+                                className="p-2 hover:bg-white/10 rounded-full text-gray-400 hover:text-white transition-colors"
+                                disabled={isGeneratingSummary}
+                            >
+                                <X size={20} />
+                            </button>
+                        </div>
+
+                        {/* Content */}
+                        <div className="flex-1 overflow-y-auto p-6">
+                            {isGeneratingSummary ? (
+                                <div className="flex flex-col items-center justify-center h-48 gap-4">
+                                    <Loader2 size={40} className="animate-spin text-indigo-500" />
+                                    <p className="text-gray-400 animate-pulse">正在整理学习笔记，请稍候...</p>
+                                </div>
+                            ) : sessionSummary ? (
+                                <div className="space-y-6 animate-in slide-in-from-bottom-4 duration-500">
+                                    {/* Overview Section */}
+                                    <div className="bg-gray-800/50 rounded-xl p-4 border border-gray-700">
+                                        <h4 className="text-indigo-400 text-sm font-bold uppercase tracking-wider mb-2 flex items-center gap-2">
+                                            <FileText size={16} /> 学习概览
+                                        </h4>
+                                        <p className="text-gray-200 leading-relaxed text-sm">
+                                            {sessionSummary.overview}
+                                        </p>
+                                    </div>
+
+                                    {/* Knowledge Points Section */}
+                                    <div>
+                                        <h4 className="text-emerald-400 text-sm font-bold uppercase tracking-wider mb-3 flex items-center gap-2">
+                                            <Lightbulb size={16} /> 核心知识点
+                                        </h4>
+                                        <ul className="space-y-2">
+                                            {sessionSummary.knowledgePoints.map((point, idx) => (
+                                                <li key={idx} className="flex gap-3 items-start bg-gray-800/30 p-3 rounded-lg border border-gray-700/50 hover:border-emerald-500/30 transition-colors">
+                                                    <span className="flex-shrink-0 w-5 h-5 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center text-xs font-bold mt-0.5">
+                                                        {idx + 1}
+                                                    </span>
+                                                    <span className="text-gray-300 text-sm">{point}</span>
+                                                </li>
+                                            ))}
+                                        </ul>
+                                    </div>
+                                    
+                                    <div className="p-3 bg-blue-900/10 border border-blue-500/20 rounded-lg text-xs text-blue-300 text-center">
+                                        这份报告已保存到历史记录中，随时可以在左侧回顾。
+                                    </div>
+                                </div>
+                            ) : (
+                                <div className="text-center text-gray-500 py-10">
+                                    <p>暂无总结内容</p>
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Footer */}
+                        <div className="p-4 bg-gray-800/50 border-t border-gray-700/50 flex justify-end">
+                            <button 
+                                onClick={() => setShowSummaryModal(false)}
+                                disabled={isGeneratingSummary}
+                                className="px-6 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                                完成
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {/* Settings & Profile Overlay (Top Right inside video) */}
             <div className="absolute top-20 right-4 flex flex-col gap-3 z-30">
                 {/* Mirror Toggle */}
@@ -756,7 +1161,7 @@ const LiveTutor: React.FC = () => {
                         <div className="text-xs font-semibold text-gray-400 mb-1 uppercase tracking-wider">摄像头设置</div>
                         
                         {/* Device Selector */}
-                        <div className="relative">
+                        <div className="relative mb-2">
                             <select 
                                 value={selectedCameraId}
                                 onChange={(e) => switchCamera(e.target.value)}
@@ -771,6 +1176,60 @@ const LiveTutor: React.FC = () => {
                             <Camera size={14} className="absolute left-2.5 top-2.5 text-gray-400 pointer-events-none" />
                         </div>
 
+                        {/* Smart Quality Toggle */}
+                        <div className="mb-2">
+                             <button 
+                                onClick={() => setIsAutoQuality(!isAutoQuality)}
+                                className={`w-full flex items-center justify-between p-2 rounded-lg text-sm transition-colors ${isAutoQuality ? 'bg-emerald-600/30 text-emerald-200' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'}`}
+                             >
+                                 <div className="flex items-center gap-2">
+                                     <Wifi size={16} />
+                                     <span>智能画质调节</span>
+                                 </div>
+                                 <div className={`w-8 h-4 rounded-full relative transition-colors ${isAutoQuality ? 'bg-emerald-500' : 'bg-gray-600'}`}>
+                                     <div className={`absolute top-0.5 w-3 h-3 bg-white rounded-full transition-all ${isAutoQuality ? 'left-4.5' : 'left-0.5'}`} style={{left: isAutoQuality ? '18px' : '2px'}} />
+                                 </div>
+                             </button>
+                             {isAutoQuality && (
+                                <div className="mt-1 px-2 flex justify-between items-center text-[10px]">
+                                    <span className="text-gray-500">当前网络:</span>
+                                    <span className={`font-medium ${
+                                        networkStatus === 'good' ? 'text-green-400' : 
+                                        networkStatus === 'moderate' ? 'text-yellow-400' : 
+                                        networkStatus === 'poor' ? 'text-red-400' : 'text-gray-400'
+                                    }`}>
+                                        {networkStatus === 'good' ? '极佳' : networkStatus === 'moderate' ? '一般' : networkStatus === 'poor' ? '较差' : '未知'}
+                                    </span>
+                                </div>
+                             )}
+                        </div>
+
+                        {/* Frame Rate / Speed Slider */}
+                        <div className={`mb-3 px-1 transition-opacity ${isAutoQuality ? 'opacity-50 pointer-events-none' : 'opacity-100'}`}>
+                            <div className="flex items-center justify-between text-xs text-gray-400 mb-2">
+                                <div className="flex items-center gap-1">
+                                    <Gauge size={14} />
+                                    <span>{isAutoQuality ? "识别速度 (自动)" : "识别速度 (手动)"}</span>
+                                </div>
+                                <span className="text-indigo-400 font-mono">{videoFrameRate} FPS</span>
+                            </div>
+                            <input 
+                                type="range" 
+                                min="0.5" 
+                                max="5" 
+                                step="0.5" 
+                                value={videoFrameRate}
+                                onChange={(e) => setVideoFrameRate(parseFloat(e.target.value))}
+                                className="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-indigo-500 hover:accent-indigo-400 transition-all"
+                            />
+                            <div className="flex justify-between text-[10px] text-gray-600 mt-1 font-medium">
+                                <span>省流</span>
+                                <span>极速</span>
+                            </div>
+                        </div>
+
+                        <div className="h-px bg-gray-700/50 my-2" />
+
                         {/* Mirror Toggle */}
                         <button 
                             onClick={() => setIsVideoMirrored(!isVideoMirrored)}
@@ -784,8 +1243,6 @@ const LiveTutor: React.FC = () => {
                                 <div className={`absolute top-0.5 w-3 h-3 bg-white rounded-full transition-all ${isVideoMirrored ? 'left-4.5' : 'left-0.5'}`} style={{left: isVideoMirrored ? '18px' : '2px'}} />
                             </div>
                         </button>
-                        
-                        <div className="h-px bg-gray-700/50 my-1" />
                         
                         {/* Speaker Mute Toggle */}
                         <button 
@@ -807,8 +1264,8 @@ const LiveTutor: React.FC = () => {
             {/* Profile Edit Modal */}
             {showProfileModal && (
                 <div className="absolute inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
-                    <div className="bg-gray-900 border border-gray-700 w-full max-w-sm rounded-2xl shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200">
-                        <div className="p-4 border-b border-gray-700/50 flex justify-between items-center bg-gray-800/50">
+                    <div className="bg-gray-900 border border-gray-700 w-full max-w-sm rounded-2xl shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200 max-h-[90vh] flex flex-col">
+                        <div className="p-4 border-b border-gray-700/50 flex justify-between items-center bg-gray-800/50 flex-shrink-0">
                             <h3 className="font-bold text-lg text-white flex items-center gap-2">
                                 <UserRoundPen size={20} className="text-indigo-400" />
                                 个人资料设置
@@ -818,7 +1275,7 @@ const LiveTutor: React.FC = () => {
                             </button>
                         </div>
                         
-                        <div className="p-6 space-y-6">
+                        <div className="p-6 space-y-6 overflow-y-auto">
                             {/* Avatar Selection */}
                             <div>
                                 <label className="block text-sm font-medium text-gray-400 mb-2">选择头像</label>
@@ -863,9 +1320,46 @@ const LiveTutor: React.FC = () => {
                                 />
                                 <p className="text-xs text-gray-500 mt-1">设置年龄后，AI 会使用更适合该年龄段的语言。</p>
                             </div>
+
+                            {/* Voice Selection */}
+                            <div>
+                                <label className="block text-sm font-medium text-gray-400 mb-2">选择 AI 语音</label>
+                                <div className="grid grid-cols-1 gap-2 max-h-40 overflow-y-auto pr-1">
+                                    {VOICE_OPTIONS.map(voice => (
+                                        <button
+                                            key={voice.id}
+                                            onClick={() => saveProfile({...userProfile, voiceName: voice.id})}
+                                            className={`flex items-center justify-between px-4 py-3 rounded-xl border transition-all ${
+                                                (userProfile.voiceName || 'Kore') === voice.id 
+                                                ? 'bg-indigo-600/20 border-indigo-500 text-white' 
+                                                : 'bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700 hover:border-gray-600'
+                                            }`}
+                                        >
+                                            <div className="flex flex-col items-start">
+                                                <div className="flex items-center gap-2">
+                                                    <span className={`text-sm font-semibold ${(userProfile.voiceName || 'Kore') === voice.id ? 'text-indigo-300' : 'text-gray-300'}`}>
+                                                        {voice.name}
+                                                    </span>
+                                                    {voice.gender === 'Female' ? <span className="text-xs text-rose-400 bg-rose-900/30 px-1 rounded">女声</span> : <span className="text-xs text-blue-400 bg-blue-900/30 px-1 rounded">男声</span>}
+                                                </div>
+                                                <span className="text-xs text-gray-500 mt-1">{voice.desc}</span>
+                                            </div>
+                                            {(userProfile.voiceName || 'Kore') === voice.id ? (
+                                                <div className="flex items-center gap-2 text-indigo-400">
+                                                    <AudioLines size={16} className="animate-pulse" />
+                                                    <div className="h-2 w-2 rounded-full bg-indigo-500 shadow-[0_0_8px_rgba(99,102,241,0.8)]"></div>
+                                                </div>
+                                            ) : (
+                                                <Volume2 size={16} className="text-gray-600" />
+                                            )}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+
                         </div>
 
-                        <div className="p-4 bg-gray-800/30 border-t border-gray-700/50">
+                        <div className="p-4 bg-gray-800/30 border-t border-gray-700/50 flex-shrink-0">
                             <button 
                                 onClick={() => setShowProfileModal(false)}
                                 className="w-full py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-medium transition-colors flex items-center justify-center gap-2"
@@ -885,6 +1379,12 @@ const LiveTutor: React.FC = () => {
                     <div className="absolute inset-0 pointer-events-none opacity-30">
                          <div className="scan-line" />
                     </div>
+
+                    {/* Diagram Board */}
+                    <DiagramBoard 
+                        data={diagramData} 
+                        onClose={() => setDiagramData(null)} 
+                    />
 
                     {/* Status Indicator (Bot) */}
                     <div className="absolute bottom-32 left-1/2 transform -translate-x-1/2 flex flex-col items-center gap-2 z-20 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -996,13 +1496,33 @@ const LiveTutor: React.FC = () => {
                         </button>
                     </div>
 
-                    <button 
-                        onClick={stopSession}
-                        className="p-4 rounded-full bg-red-600 text-white hover:bg-red-500 transition-all shadow-lg hover:shadow-red-600/20 hover:scale-110 active:scale-95"
-                        title="结束会话"
-                    >
-                        <Square size={24} fill="currentColor" />
-                    </button>
+                    <div className="flex items-center gap-4">
+                        <button 
+                            onClick={() => saveSessionToHistory(true)}
+                            disabled={messages.length === 0}
+                            className={`p-4 rounded-full text-white transition-all relative group ${
+                                messages.length === 0 
+                                ? 'bg-gray-800 opacity-50 cursor-not-allowed' 
+                                : 'bg-gray-800 hover:bg-gray-700 hover:scale-110 active:scale-95'
+                            }`}
+                            title="保存当前对话"
+                        >
+                            <Save size={24} className={showSaveConfirm ? "text-green-500 transition-colors" : ""} />
+                            {showSaveConfirm && (
+                                <span className="absolute -top-10 left-1/2 transform -translate-x-1/2 text-xs font-bold bg-green-500/90 text-white px-3 py-1.5 rounded-lg shadow-lg animate-in fade-in slide-in-from-bottom-2 whitespace-nowrap z-50">
+                                    已保存
+                                </span>
+                            )}
+                        </button>
+
+                        <button 
+                            onClick={stopSession}
+                            className="p-4 rounded-full bg-red-600 text-white hover:bg-red-500 transition-all shadow-lg hover:shadow-red-600/20 hover:scale-110 active:scale-95"
+                            title="结束会话"
+                        >
+                            <Square size={24} fill="currentColor" />
+                        </button>
+                    </div>
                 </>
             ) : (
                 <div className="text-sm text-gray-500 italic">
@@ -1012,12 +1532,10 @@ const LiveTutor: React.FC = () => {
         </div>
       </div>
 
-      {/* Sidebar: Transcript with Input */}
+      {/* Sidebar: Transcript */}
       <Transcript 
         messages={messages} 
-        onSendMessage={handleSendMessage}
-        onSendFile={handleSendFile}
-        disabled={connectionState !== ConnectionState.CONNECTED}
+        userProfile={userProfile}
       />
     </div>
   );
