@@ -3,7 +3,7 @@ import { X, Maximize2, Minimize2 } from 'lucide-react';
 
 export interface Shape {
   id: string;
-  type: 'line' | 'circle' | 'rect' | 'text' | 'polygon' | 'arrow';
+  type: 'line' | 'circle' | 'rect' | 'text' | 'polygon' | 'arrow' | 'path';
   x?: number;
   y?: number;
   x1?: number;
@@ -14,11 +14,13 @@ export interface Shape {
   width?: number;
   height?: number;
   points?: string; // "x1,y1 x2,y2 ..."
+  d?: string; // SVG path data
   content?: string;
   color?: string;
   strokeWidth?: number;
   fill?: string;
   label?: string;
+  fontSize?: number;
 }
 
 export interface DiagramData {
@@ -95,8 +97,8 @@ const DiagramBoard: React.FC<DiagramBoardProps> = ({ data, onClose }) => {
                 return (
                   <g key={shape.id}>
                     <line 
-                      x1={shape.x1} y1={shape.y1} 
-                      x2={shape.x2} y2={shape.y2} 
+                      x1={shape.x1 || 0} y1={shape.y1 || 0} 
+                      x2={shape.x2 || 0} y2={shape.y2 || 0} 
                       stroke={stroke} 
                       strokeWidth={strokeWidth} 
                       strokeLinecap="round"
@@ -106,7 +108,7 @@ const DiagramBoard: React.FC<DiagramBoardProps> = ({ data, onClose }) => {
                         x={(shape.x1! + shape.x2!) / 2} 
                         y={(shape.y1! + shape.y2!) / 2 - 5} 
                         fill={stroke} 
-                        fontSize="12" 
+                        fontSize={shape.fontSize || 14} 
                         textAnchor="middle"
                       >
                         {shape.label}
@@ -123,8 +125,8 @@ const DiagramBoard: React.FC<DiagramBoardProps> = ({ data, onClose }) => {
                       </marker>
                     </defs>
                     <line 
-                      x1={shape.x1} y1={shape.y1} 
-                      x2={shape.x2} y2={shape.y2} 
+                      x1={shape.x1 || 0} y1={shape.y1 || 0} 
+                      x2={shape.x2 || 0} y2={shape.y2 || 0} 
                       stroke={stroke} 
                       strokeWidth={strokeWidth} 
                       markerEnd={`url(#arrowhead-${shape.id})`}
@@ -134,7 +136,7 @@ const DiagramBoard: React.FC<DiagramBoardProps> = ({ data, onClose }) => {
                         x={(shape.x1! + shape.x2!) / 2} 
                         y={(shape.y1! + shape.y2!) / 2 - 5} 
                         fill={stroke} 
-                        fontSize="12" 
+                        fontSize={shape.fontSize || 14} 
                         textAnchor="middle"
                       >
                         {shape.label}
@@ -146,16 +148,16 @@ const DiagramBoard: React.FC<DiagramBoardProps> = ({ data, onClose }) => {
                 return (
                   <g key={shape.id}>
                     <circle 
-                      cx={shape.x} cy={shape.y} r={shape.r} 
+                      cx={shape.x || 0} cy={shape.y || 0} r={shape.r || 10} 
                       stroke={stroke} 
                       strokeWidth={strokeWidth} 
                       fill={fill} 
                     />
                     {shape.label && (
                       <text 
-                        x={shape.x} y={shape.y! + shape.r! + 15} 
+                        x={shape.x || 0} y={(shape.y || 0) + (shape.r || 10) + 15} 
                         fill={stroke} 
-                        fontSize="12" 
+                        fontSize={shape.fontSize || 14} 
                         textAnchor="middle"
                       >
                         {shape.label}
@@ -167,8 +169,8 @@ const DiagramBoard: React.FC<DiagramBoardProps> = ({ data, onClose }) => {
                 return (
                   <g key={shape.id}>
                     <rect 
-                      x={shape.x} y={shape.y} 
-                      width={shape.width} height={shape.height} 
+                      x={shape.x || 0} y={shape.y || 0} 
+                      width={shape.width || 50} height={shape.height || 50} 
                       stroke={stroke} 
                       strokeWidth={strokeWidth} 
                       fill={fill} 
@@ -176,10 +178,10 @@ const DiagramBoard: React.FC<DiagramBoardProps> = ({ data, onClose }) => {
                     />
                     {shape.label && (
                       <text 
-                        x={shape.x! + shape.width! / 2} 
-                        y={shape.y! + shape.height! / 2} 
+                        x={(shape.x || 0) + (shape.width || 50) / 2} 
+                        y={(shape.y || 0) + (shape.height || 50) / 2} 
                         fill={stroke} 
-                        fontSize="12" 
+                        fontSize={shape.fontSize || 14} 
                         textAnchor="middle" 
                         alignmentBaseline="middle"
                       >
@@ -192,17 +194,36 @@ const DiagramBoard: React.FC<DiagramBoardProps> = ({ data, onClose }) => {
                 return (
                   <g key={shape.id}>
                     <polygon 
-                      points={shape.points} 
+                      points={shape.points || ""} 
                       stroke={stroke} 
                       strokeWidth={strokeWidth} 
                       fill={fill} 
                     />
                     {shape.label && (
-                      // Simple label positioning (approximate center)
                       <text 
-                        x={10} y={10} // Placeholder, hard to calculate center without parsing points
+                        x={10} y={10} 
                         fill={stroke} 
-                        fontSize="12" 
+                        fontSize={shape.fontSize || 14} 
+                      >
+                        {shape.label}
+                      </text>
+                    )}
+                  </g>
+                );
+              case 'path':
+                return (
+                  <g key={shape.id}>
+                    <path 
+                      d={shape.d || ""} 
+                      stroke={stroke} 
+                      strokeWidth={strokeWidth} 
+                      fill={fill} 
+                    />
+                    {shape.label && (
+                      <text 
+                        x={10} y={10} 
+                        fill={stroke} 
+                        fontSize={shape.fontSize || 14} 
                       >
                         {shape.label}
                       </text>
@@ -213,12 +234,12 @@ const DiagramBoard: React.FC<DiagramBoardProps> = ({ data, onClose }) => {
                 return (
                   <text 
                     key={shape.id}
-                    x={shape.x} y={shape.y} 
+                    x={shape.x || 0} y={shape.y || 0} 
                     fill={stroke} 
-                    fontSize={shape.height || 14} 
+                    fontSize={shape.fontSize || shape.height || 24} 
                     textAnchor="middle"
                   >
-                    {shape.content}
+                    {shape.content || shape.label}
                   </text>
                 );
               default:

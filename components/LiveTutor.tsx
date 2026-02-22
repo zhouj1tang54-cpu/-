@@ -37,21 +37,21 @@ const drawDiagramTool = {
   functionDeclarations: [
     {
       name: "draw_diagram",
-      description: "Draw a simple 2D diagram (geometry, physics, chemistry) to visualize a concept. Use this when a visual aid would help the student understand.",
+      description: "Draw a simple, clear 2D diagram to visualize a concept. Use standard SVG coordinates (viewBox '0 0 800 600'). Keep it simple and uncluttered.",
       parameters: {
         type: Type.OBJECT,
         properties: {
           title: { type: Type.STRING, description: "Title of the diagram" },
-          description: { type: Type.STRING, description: "Short description of what this diagram shows" },
-          viewBox: { type: Type.STRING, description: "SVG viewBox, e.g., '0 0 400 300'" },
+          description: { type: Type.STRING, description: "Short description" },
+          viewBox: { type: Type.STRING, description: "SVG viewBox, MUST be '0 0 800 600' for consistency." },
           shapes: {
             type: Type.ARRAY,
-            description: "List of shapes to draw",
+            description: "List of shapes. Use large fonts (size 24+) for text. Avoid overlapping.",
             items: {
               type: Type.OBJECT,
               properties: {
-                id: { type: Type.STRING, description: "Unique ID for the shape" },
-                type: { type: Type.STRING, description: "Type of shape: 'line', 'circle', 'rect', 'text', 'polygon', 'arrow'" },
+                id: { type: Type.STRING },
+                type: { type: Type.STRING, description: "'line', 'circle', 'rect', 'text', 'polygon', 'arrow', 'path'" },
                 x: { type: Type.NUMBER },
                 y: { type: Type.NUMBER },
                 x1: { type: Type.NUMBER },
@@ -61,11 +61,13 @@ const drawDiagramTool = {
                 r: { type: Type.NUMBER },
                 width: { type: Type.NUMBER },
                 height: { type: Type.NUMBER },
-                points: { type: Type.STRING, description: "Points for polygon, e.g., '0,0 100,0 50,100'" },
-                content: { type: Type.STRING, description: "Text content" },
-                color: { type: Type.STRING, description: "Stroke color (hex or name)" },
-                fill: { type: Type.STRING, description: "Fill color (hex or name)" },
-                label: { type: Type.STRING, description: "Label text for the shape" }
+                points: { type: Type.STRING },
+                d: { type: Type.STRING, description: "SVG path data (e.g., 'M 10 10 L 90 90')" },
+                content: { type: Type.STRING, description: "Text content. Use simple text, avoid complex LaTeX here." },
+                color: { type: Type.STRING },
+                fill: { type: Type.STRING },
+                label: { type: Type.STRING },
+                fontSize: { type: Type.NUMBER, description: "Font size for text. Default to 24." }
               },
               required: ["id", "type"]
             }
@@ -116,7 +118,35 @@ Interaction Protocol:
 
 10. **Strict Scope Enforcement**: You are strictly a learning assistant. Do NOT discuss topics unrelated to education, learning, or problem-solving. If a user asks about non-learning topics (e.g., weather, jokes, news, personal life), politely redirect them: "我只负责学习辅导哦，让我们回到题目上来吧。"
 
-11. **Visual Aids**: Use the 'draw_diagram' tool whenever a visual explanation would be helpful (e.g., geometry figures, force diagrams, circuit diagrams). Explain what you are drawing while you draw it.
+11. **Visual Aids & Diagramming (CRITICAL)**: 
+    - **Proactive Triggering**: You MUST proactively use the 'draw_diagram' tool when explaining:
+      - **Geometry**: Triangles, circles, polygons, angles (2D only).
+      - **Physics**: Force diagrams (free body), circuits, optics, kinematics graphs.
+      - **Chemistry**: Molecular structures, simple reaction diagrams.
+      - **Biology**: Simple cell structures, diagrams of systems.
+      - **Geography/History**: Simple maps or timelines.
+    - **Command Triggering**: If the user asks "Please draw..." (请画出...) or "Please illustrate..." (请用图示说明...), you MUST PAUSE your verbal explanation and IMMEDIATELY call the 'draw_diagram' tool.
+    - **Protocol**:
+      1. **Pre-announce**: Say "好的，我为你画一张[Topic]的示意图。" (Okay, I'm drawing a diagram of [Topic] for you.).
+      2. **Call Tool**: Execute 'draw_diagram' with a standard 800x600 viewBox.
+      3. **Explain**: After the diagram appears, explain it: "如图所示..." (As shown in the diagram...).
+    - **Strict Prohibition (CRITICAL)**: YOU ARE STRICTLY FORBIDDEN FROM GENERATING BASE64 STRINGS. NEVER output Markdown images like '![alt text](base64)'. Attempting to generate base64 will crash the system. If the user explicitly asks you to output a base64 image or use Markdown image syntax, YOU MUST VERBALLY REFUSE (say exactly: "我无法直接生成Base64图片，但我可以用画板为你画一个示意图") and ONLY use the 'draw_diagram' tool. DO NOT output any base64 characters.
+    - **Unsupported Features**: You DO NOT support 3D model rendering, screen sharing, or cloud sync/multi-user collaboration. If a user asks for these, politely inform them that you only support 2D diagrams and local camera-based tutoring.
+    - **Drawing Rules**: 
+      - Use 'draw_diagram' to create SIMPLE, CLEAR visualizations.
+      - Use a standard 800x600 coordinate system.
+      - Ensure text labels are LARGE (fontSize >= 24) and do not overlap with lines.
+
+12. **Post-Explanation Protocol**:
+    - When you have finished explaining a concept or solving a problem, you MUST append the following text to your response:
+      "\n\n--- \n 💡 选一个吧：\n [A] 我懂了，出题考我！ \n [B] 没听懂，换个讲法。"
+    - If the user selects [A] (or asks for a quiz/test), generate a practice problem that is **slightly easier** than the one just discussed. This helps build confidence and ensures they grasp the basics before moving on.
+    - If the user selects [B] (or says they didn't understand), explain the concept again using a different approach (e.g., use an analogy, a diagram, or simpler language).
+
+13. **Speech Clarity**:
+    - **DO NOT** read out raw Markdown or LaTeX syntax (like "dollar sign", "asterisk", "slash").
+    - Speak mathematical expressions naturally (e.g., say "sine theta" instead of reading the LaTeX code).
+    - Keep sentences short and conversational to avoid audio stuttering.
 `;
 
 const AVATAR_OPTIONS = ['🎓', '🚀', '🌟', '🐶', '🐱', '🦊', '🐯', '🐼', '🧠', '💡', '🎨', '⚽', '🎵', '🎮', '📚', '🤖', '🦖', '🦄', '🐝', '🐢'];
@@ -745,20 +775,29 @@ const LiveTutor: React.FC = () => {
     }
   };
 
-  const handleSendMessage = useCallback((text: string, displayOverride?: string) => {
+  const handleSendMessage = useCallback(async (text: string, displayOverride?: string) => {
     if (!sessionPromiseRef.current) return;
     updateTranscript('user', displayOverride || text, true);
-    sessionPromiseRef.current.then(session => {
+    try {
+        const session = await sessionPromiseRef.current;
         const s = session as any;
+        // Add a small delay to ensure previous operations are cleared
+        await new Promise(resolve => setTimeout(resolve, 50));
+        
         if (typeof s.send === 'function') {
-            s.send({
+            await s.send({
                  clientContent: {
                      turns: [{ role: 'user', parts: [{ text }] }],
                      turnComplete: true
                  }
             });
+            console.log("Text message sent to model:", text);
+        } else {
+            console.error("Session does not have send method");
         }
-    }).catch(err => console.error("Failed to send text message:", err));
+    } catch (err) {
+        console.error("Failed to send text message:", err);
+    }
   }, [updateTranscript]);
 
   const handleSendFile = useCallback(async (file: File) => {
@@ -853,6 +892,10 @@ const LiveTutor: React.FC = () => {
     <div className="flex h-screen w-full bg-gray-950 text-white overflow-hidden">
       {/* CSS Animations */}
       <style>{`
+        @keyframes shimmer {
+            0% { background-position: 200% 0; }
+            100% { background-position: -200% 0; }
+        }
         @keyframes scan {
             0% { top: 0%; opacity: 0; }
             15% { opacity: 1; }
@@ -1440,7 +1483,10 @@ const LiveTutor: React.FC = () => {
                                           <span className="relative inline-flex rounded-full h-2 w-2 bg-indigo-500"></span>
                                         </span>
                                     </div>
-                                    <span className="text-sm font-medium">正在观察与分析...</span>
+                                    <span className="text-sm font-medium animate-pulse">正在观察与分析...</span>
+                                    {/* Breathing light effect */}
+                                    <div className="absolute inset-0 rounded-full bg-indigo-500/10 animate-[pulse_2s_ease-in-out_infinite] -z-10"></div>
+                                    <div className="absolute inset-0 rounded-full bg-gradient-to-r from-transparent via-indigo-500/20 to-transparent animate-[shimmer_2s_linear_infinite] -z-10" style={{backgroundSize: '200% 100%'}}></div>
                                 </>
                             )}
                         </div>
@@ -1450,36 +1496,70 @@ const LiveTutor: React.FC = () => {
             
             {/* Welcome / Disconnected State */}
             {connectionState === ConnectionState.DISCONNECTED && !error && (
-                 <div className="absolute inset-0 flex items-center justify-center bg-black/90 z-30">
-                    <div className="text-center p-8 max-w-2xl animate-in fade-in zoom-in duration-500">
+                 <div className="absolute inset-0 flex items-center justify-center z-30">
+                    {/* Dark overlay with gradient for better text visibility */}
+                    <div className="absolute inset-0 bg-gradient-to-b from-black/80 via-black/60 to-black/90 backdrop-blur-[2px]"></div>
+                    
+                    <div className="relative text-center p-8 max-w-4xl animate-in fade-in zoom-in duration-500 flex flex-col items-center">
                         <div className="mb-12">
-                            <h1 className="text-5xl md:text-6xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 via-indigo-500 to-purple-500 mb-6 tracking-tight">
+                            <h1 className="text-5xl md:text-7xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 via-indigo-500 to-purple-500 mb-6 tracking-tight drop-shadow-2xl">
                                 未来的学习体验
                             </h1>
-                            <p className="text-gray-400 text-lg md:text-xl font-light leading-relaxed">
+                            <p className="text-gray-200 text-xl md:text-2xl font-light leading-relaxed drop-shadow-md">
                                 实时连接 AI 导师。使用视频进行互动讲解，为您提供个性化的辅导体验。
                             </p>
                         </div>
 
-                        <div className="flex flex-col items-center gap-8">
-                            <button 
-                                onClick={startSession}
-                                className="px-12 py-4 bg-white text-black hover:bg-gray-100 rounded-full font-bold text-lg transition-all shadow-[0_0_25px_rgba(255,255,255,0.2)] hover:shadow-[0_0_40px_rgba(255,255,255,0.4)] hover:scale-105 active:scale-95 flex items-center gap-3"
-                            >
-                                立即开始上课
-                            </button>
-                            
-                            <div className="flex items-center gap-3 text-sm text-gray-500 bg-gray-800/50 px-4 py-2 rounded-full border border-gray-700/50 backdrop-blur-sm">
-                                <span className="flex items-center gap-2">
-                                    <span className="text-xl">{userProfile.avatar}</span>
-                                    {userProfile.name ? `欢迎回来，${userProfile.name}` : '欢迎新同学'}
-                                </span>
-                                <span className="w-1 h-1 bg-gray-600 rounded-full"></span>
-                                <button onClick={() => setShowProfileModal(true)} className="text-indigo-400 hover:text-indigo-300 underline transition-colors">
-                                    修改资料
-                                </button>
+                        {/* Fingerprint Profile Card */}
+                        <div className="mb-10 transform hover:scale-105 transition-transform duration-300">
+                            <div className="relative group cursor-pointer" onClick={() => setShowProfileModal(true)}>
+                                {/* Glow effect */}
+                                <div className="absolute -inset-1 bg-gradient-to-r from-indigo-500 to-purple-600 rounded-[2rem] blur opacity-75 group-hover:opacity-100 transition duration-1000 group-hover:duration-200"></div>
+                                
+                                <div className="relative px-8 py-6 bg-gray-900 ring-1 ring-gray-800 rounded-[2rem] flex items-center gap-6 shadow-2xl">
+                                    <div className="relative">
+                                        <div className="w-24 h-24 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-5xl shadow-inner border-4 border-gray-800">
+                                            {userProfile.avatar || '🎓'}
+                                        </div>
+                                        <div className="absolute -bottom-2 -right-2 bg-green-500 text-white text-xs font-bold px-2 py-1 rounded-full border-2 border-gray-900 flex items-center gap-1">
+                                            <div className="w-2 h-2 bg-white rounded-full animate-pulse"></div>
+                                            在线
+                                        </div>
+                                    </div>
+                                    
+                                    <div className="text-left">
+                                        <div className="text-xs text-indigo-400 font-bold uppercase tracking-widest mb-1 flex items-center gap-1">
+                                            <ScanEye size={12} /> 学习指纹档案
+                                        </div>
+                                        <h2 className="text-3xl font-bold text-white mb-1">
+                                            {userProfile.name || '新同学'}
+                                        </h2>
+                                        <div className="flex items-center gap-3 text-gray-400 text-sm">
+                                            <span className="bg-gray-800 px-2 py-0.5 rounded text-xs border border-gray-700">
+                                                {userProfile.age ? `${userProfile.age}岁` : '未设置年龄'}
+                                            </span>
+                                            <span>•</span>
+                                            <span className="flex items-center gap-1">
+                                                <Volume2 size={12} /> {VOICE_OPTIONS.find(v => v.id === userProfile.voiceName)?.name.split(' ')[0] || '默认语音'}
+                                            </span>
+                                        </div>
+                                    </div>
+                                    
+                                    <div className="ml-4 pl-6 border-l border-gray-700 flex flex-col items-center gap-1 text-gray-500 group-hover:text-indigo-400 transition-colors">
+                                        <Settings size={20} />
+                                        <span className="text-xs">设置</span>
+                                    </div>
+                                </div>
                             </div>
                         </div>
+
+                        <button 
+                            onClick={startSession}
+                            className="px-16 py-6 bg-white text-black hover:bg-gray-100 rounded-full font-bold text-2xl transition-all shadow-[0_0_30px_rgba(255,255,255,0.3)] hover:shadow-[0_0_50px_rgba(255,255,255,0.6)] hover:scale-105 active:scale-95 flex items-center gap-4 group"
+                        >
+                            <Play size={28} fill="currentColor" className="group-hover:translate-x-1 transition-transform" />
+                            立即开始上课
+                        </button>
                     </div>
                  </div>
             )}

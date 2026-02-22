@@ -1,6 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { ChatMessage, SavedSession, UserProfile } from '../types';
 import { User, Bot, History, ChevronLeft, Trash2, MessageSquare, Calendar, BookOpen, Lightbulb } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
+import remarkMath from 'remark-math';
+import rehypeKatex from 'rehype-katex';
+import 'katex/dist/katex.min.css';
 
 interface TranscriptProps {
   messages: ChatMessage[];
@@ -92,15 +96,22 @@ const Transcript: React.FC<TranscriptProps> = ({ messages, userProfile }) => {
               )}
             </div>
             <div
-              className={`p-3 rounded-lg text-sm max-w-[85%] ${
+              className={`p-4 rounded-xl text-lg leading-relaxed max-w-[90%] shadow-md ${
                 msg.role === 'user'
-                  ? 'bg-indigo-900/50 text-indigo-100'
-                  : 'bg-gray-800 text-gray-100'
+                  ? 'bg-indigo-900/50 text-indigo-100 border border-indigo-500/20'
+                  : 'bg-gray-800 text-gray-100 border border-gray-700'
               }`}
             >
-              <p className="whitespace-pre-wrap">{msg.text}</p>
+              <div className="whitespace-pre-wrap tracking-wide markdown-body">
+                <ReactMarkdown 
+                    remarkPlugins={[remarkMath]} 
+                    rehypePlugins={[rehypeKatex]}
+                >
+                    {msg.text}
+                </ReactMarkdown>
+              </div>
               {!msg.isComplete && (
-                <span className="inline-block w-1.5 h-1.5 bg-gray-400 rounded-full animate-pulse ml-1" />
+                <span className="inline-block w-2 h-2 bg-gray-400 rounded-full animate-pulse ml-1" />
               )}
             </div>
           </div>
