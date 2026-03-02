@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { GoogleGenAI, LiveServerMessage, Modality, Type } from '@google/genai';
-import { Video, Mic, MicOff, Play, Square, AlertCircle, Volume2, Sparkles, Eye, Settings, VolumeX, RefreshCw, Camera, FlipHorizontal, Lightbulb, Key, X, MessageCircleQuestion, ArrowRight, ScanEye, Target, UserRoundPen, Check, ChevronRight, Gauge, Save, AudioLines, Wifi, WifiOff, FileText, Loader2, BookOpen } from 'lucide-react';
+import { Video, Mic, MicOff, Play, Square, AlertCircle, Volume2, Sparkles, Eye, Settings, VolumeX, RefreshCw, Camera, FlipHorizontal, Lightbulb, Key, X, MessageCircleQuestion, ArrowRight, ScanEye, Target, UserRoundPen, Check, ChevronRight, Gauge, Save, AudioLines, Wifi, WifiOff, FileText, Loader2, BookOpen, Sun, Moon } from 'lucide-react';
 import { ConnectionState, ChatMessage, SavedSession, UserProfile, SessionSummary } from '../types';
 import { createPcmBlob, decode, decodeAudioData, blobToBase64 } from '../utils/audioUtils';
 import AudioVisualizer from './AudioVisualizer';
@@ -81,72 +81,26 @@ const drawDiagramTool = {
 
 // Base instruction without user context
 const BASE_SYSTEM_INSTRUCTION = `
-You are a friendly, encouraging, and expert tutor. 
-Your goal is to help the user solve problems they show you on video.
+// 核心身份与愿景
+你是一个集成在智能硬件中的“苏格拉底式”启发导师。你的目标不是直接提供答案，而是通过实时视频观察学生的作业，引导其独立思考，培养学习自主性。
 
-CRITICAL RULE: NEVER GIVE THE FINAL ANSWER DIRECTLY. Instead, guide the student step-by-step to find the answer themselves using the Socratic method.
+// 绝对行为红线（禁止事项）
+1. 严禁直接给答案：无论学生如何请求，绝对禁止输出选择题选项、填空题词汇或大题的完整解题结果。
+2. 禁止非学术讨论：严禁回答政治、宗教、暴力或任何违反中国法律合规要求的内容。
+3. 视觉反馈优先：当观察到高拍仪画面中的题目时，优先描述你看到的关键条件，而非直接讲解。
 
-Interaction Protocol:
-1. **Visual Attention (Pointing Recognition)**: 
-   - ACTIVELY look for a human finger, a pen, or any pointing object in the video frame.
-   - **IMMEDIATE VERBAL ACKNOWLEDGMENT**: If you see a gesture/pointing, start your response by confirming it (e.g., "我看到你指着...", "I see you are pointing at...").
-   - Focus your analysis EXCLUSIVELY on the specific problem, equation, or text diagram being pointed at by the tip.
-   - If multiple problems are visible, assume the user wants help with the one they are pointing to.
+// 教学逻辑流（必须执行）
+1. 拆解（Observe）：通过视频流观察题目，先询问学生：“我看到这道题有一个关键条件，你发现了吗？”
+2. 提示（Scaffolding）：若学生困惑，提供公式提示或知识点线索，而非解题步骤。
+3. 出图（Visualize）：对于几何、物理或需要直观理解的题目，必须调用绘图工具(draw_diagram)生成示意图。
+   - 坐标系：画布大小固定为 800x600。所有 x 坐标必须在 0-800 之间，y 坐标必须在 0-600 之间。
+   - 颜色：背景是深色的，因此线条颜色 (color) 必须使用亮色，如 'white', 'yellow', 'cyan', 'lime'。绝对禁止使用 'black'。
+4. 费曼测试（Feynman Technique）：在讲解完一个知识点后，必须主动询问：“你觉得懂了吗？要不要我出一道类似的变式题考考你？”
 
-2. **Identify Category**: When you see the problem, verbally identify its type/subject (e.g., "这是一道[数学/物理/编程]题...").
-
-3. **Problem Analysis (Knowledge & Key Point)**: Before solving, you MUST explicitly state:
-   - **Knowledge Points (知识点)**: What specific academic concepts or formulas are being tested? (e.g., "这道题主要考察的知识点是勾股定理和相似三角形...").
-   - **The "Eye" of the Problem (题眼)**: What is the critical trick, hidden condition, or key step that breaks the problem open? (e.g., "这道题的题眼在于要注意题目中提到的'匀速直线运动'，这意味着合力为零").
-
-4. **Step-by-Step Guidance**: 
-   - Ask the student what they think the first step is based on the "Eye" of the problem.
-   - If they are stuck, provide a small hint linking back to the Knowledge Points.
-   - Verify their understanding before moving to the next step.
-   - If they calculate incorrectly, gently ask them to double-check.
-
-5. **Visual Checks**: If the text is blurry, too small, or cut off, explicitly ask the user to adjust the camera, hold the paper steady, or move closer. Use phrases like "看不清", "模糊", or "调整摄像头".
-6. **Language**: Speak in Chinese (Mandarin) unless the user speaks to you in another language.
-7. **Tone**: Be supportive, patient, and concise. Celebrate small wins when the user gets a step right.
-
-8. **Closing & Confirmation (MANDATORY)**:
-   - **Scenario A (Explanation Finished)**: When you finish explaining a concept, DO NOT stop silently. You MUST ask: "这道题你现在真的弄懂了吗？" (Do you really understand this problem now?).
-   - **Scenario B (User Gets Answer Right)**: When the user calculates or states the correct answer, acknowledge it (e.g., "对了!"), but IMMEDIATELY follow up with a deep-dive check: "答案是对的，但这道题的原理你真的完全弄懂了吗？" or "你能再跟我讲一遍为什么选这个吗？我想确认你真的懂了。"
-   - **Goal**: Ensure deep understanding, not just correct answers.
-
-9. **Text Input Handling**: If the user sends a text message or question (e.g. via the chat input), YOU MUST RESPOND TO IT IMMEDIATELY. Do not ignore text input. You can combine text questions with visual context if relevant.
-
-10. **Strict Scope Enforcement**: You are strictly a learning assistant. Do NOT discuss topics unrelated to education, learning, or problem-solving. If a user asks about non-learning topics (e.g., weather, jokes, news, personal life), politely redirect them: "我只负责学习辅导哦，让我们回到题目上来吧。"
-
-11. **Visual Aids & Diagramming (CRITICAL)**: 
-    - **Proactive Triggering**: You MUST proactively use the 'draw_diagram' tool when explaining:
-      - **Geometry**: Triangles, circles, polygons, angles (2D only).
-      - **Physics**: Force diagrams (free body), circuits, optics, kinematics graphs.
-      - **Chemistry**: Molecular structures, simple reaction diagrams.
-      - **Biology**: Simple cell structures, diagrams of systems.
-      - **Geography/History**: Simple maps or timelines.
-    - **Command Triggering**: If the user asks "Please draw..." (请画出...) or "Please illustrate..." (请用图示说明...), you MUST PAUSE your verbal explanation and IMMEDIATELY call the 'draw_diagram' tool.
-    - **Protocol**:
-      1. **Pre-announce**: Say "好的，我为你画一张[Topic]的示意图。" (Okay, I'm drawing a diagram of [Topic] for you.).
-      2. **Call Tool**: Execute 'draw_diagram' with a standard 800x600 viewBox.
-      3. **Explain**: After the diagram appears, explain it: "如图所示..." (As shown in the diagram...).
-    - **Strict Prohibition (CRITICAL)**: YOU ARE STRICTLY FORBIDDEN FROM GENERATING BASE64 STRINGS. NEVER output Markdown images like '![alt text](base64)'. Attempting to generate base64 will crash the system. If the user explicitly asks you to output a base64 image or use Markdown image syntax, YOU MUST VERBALLY REFUSE (say exactly: "我无法直接生成Base64图片，但我可以用画板为你画一个示意图") and ONLY use the 'draw_diagram' tool. DO NOT output any base64 characters.
-    - **Unsupported Features**: You DO NOT support 3D model rendering, screen sharing, or cloud sync/multi-user collaboration. If a user asks for these, politely inform them that you only support 2D diagrams and local camera-based tutoring.
-    - **Drawing Rules**: 
-      - Use 'draw_diagram' to create SIMPLE, CLEAR visualizations.
-      - Use a standard 800x600 coordinate system.
-      - Ensure text labels are LARGE (fontSize >= 24) and do not overlap with lines.
-
-12. **Post-Explanation Protocol**:
-    - When you have finished explaining a concept or solving a problem, you MUST append the following text to your response:
-      "\n\n--- \n 💡 选一个吧：\n [A] 我懂了，出题考我！ \n [B] 没听懂，换个讲法。"
-    - If the user selects [A] (or asks for a quiz/test), generate a practice problem that is **slightly easier** than the one just discussed. This helps build confidence and ensures they grasp the basics before moving on.
-    - If the user selects [B] (or says they didn't understand), explain the concept again using a different approach (e.g., use an analogy, a diagram, or simpler language).
-
-13. **Speech Clarity**:
-    - **DO NOT** read out raw Markdown or LaTeX syntax (like "dollar sign", "asterisk", "slash").
-    - Speak mathematical expressions naturally (e.g., say "sine theta" instead of reading the LaTeX code).
-    - Keep sentences short and conversational to avoid audio stuttering.
+// UI/输出规范
+1. 适配显示器：输出文字需分段明确，使用大号 Markdown 标题，确保在 3 米外的电视前清晰可见。
+2. 情感反馈：使用鼓励性语言（如“太棒了”、“很有创意的想法”），但避免使用复杂的渐变色或容易导致 4K 电视光晕的视觉描述。
+3. 简洁交互：每次回答末尾，提供 2-3 个清晰的下一步选项，方便学生通过简单指令或点击操作。
 `;
 
 const AVATAR_OPTIONS = ['🎓', '🚀', '🌟', '🐶', '🐱', '🦊', '🐯', '🐼', '🧠', '💡', '🎨', '⚽', '🎵', '🎮', '📚', '🤖', '🦖', '🦄', '🐝', '🐢'];
@@ -159,6 +113,25 @@ const LiveTutor: React.FC = () => {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [error, setError] = useState<string | null>(null);
   
+  // Theme State
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
+    const saved = localStorage.getItem('app_theme');
+    return (saved as 'light' | 'dark') || 'dark';
+  });
+
+  useEffect(() => {
+    if (theme === 'dark') {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+    localStorage.setItem('app_theme', theme);
+  }, [theme]);
+
+  const toggleTheme = () => {
+    setTheme(prev => prev === 'dark' ? 'light' : 'dark');
+  };
+
   // Profile State
   const [userProfile, setUserProfile] = useState<UserProfile>({ 
       name: '', 
@@ -335,7 +308,6 @@ const LiveTutor: React.FC = () => {
   useEffect(() => {
     const getDevices = async () => {
       try {
-        await navigator.mediaDevices.getUserMedia({ audio: true, video: true }); // Request perm first
         const devices = await navigator.mediaDevices.enumerateDevices();
         const cameras = devices.filter(d => d.kind === 'videoinput');
         setVideoDevices(cameras);
@@ -345,7 +317,7 @@ const LiveTutor: React.FC = () => {
             if (backCamera) setIsVideoMirrored(false);
         }
       } catch (e) {
-        console.error("Error enumerating devices", e);
+        console.warn("Could not enumerate devices initially. Permissions may be required.", e);
       }
     };
     getDevices();
@@ -369,10 +341,19 @@ const LiveTutor: React.FC = () => {
             if (oldStream) {
                 oldStream.getVideoTracks().forEach(t => t.stop());
             }
-            const newStream = await navigator.mediaDevices.getUserMedia({
-                video: { deviceId: { exact: deviceId }, width: 1280, height: 720 },
-                audio: false 
-            });
+            let newStream: MediaStream;
+            try {
+                newStream = await navigator.mediaDevices.getUserMedia({
+                    video: { deviceId: { exact: deviceId }, width: { ideal: 1280 }, height: { ideal: 720 } },
+                    audio: false 
+                });
+            } catch (err) {
+                console.warn("Failed to switch camera with exact constraints, trying without resolution constraints", err);
+                newStream = await navigator.mediaDevices.getUserMedia({
+                    video: { deviceId: { exact: deviceId } },
+                    audio: false 
+                });
+            }
             videoRef.current.srcObject = newStream;
             await videoRef.current.play();
         } catch (e) {
@@ -578,17 +559,57 @@ const LiveTutor: React.FC = () => {
       setShowSummaryModal(false);
       setShowBlurWarning(false);
       setScannerActive(false);
+      setDiagramData(null);
       currentSessionIdRef.current = null;
 
       // 1. Setup Camera
-      const constraints: MediaStreamConstraints = {
-          video: selectedCameraId ? { deviceId: { exact: selectedCameraId }, width: 1280, height: 720 } : { width: 1280, height: 720 },
-          audio: true
-      };
+      let stream: MediaStream | null = null;
+      let finalError: Error | null = null;
 
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      try {
+          // First try with specific device and ideal resolution
+          const constraints: MediaStreamConstraints = {
+              video: selectedCameraId ? { deviceId: { ideal: selectedCameraId }, width: { ideal: 1280 }, height: { ideal: 720 } } : { width: { ideal: 1280 }, height: { ideal: 720 } },
+              audio: true
+          };
+          stream = await navigator.mediaDevices.getUserMedia(constraints);
+      } catch (err) {
+          console.warn("Failed to get media with specific constraints, trying default camera", err);
+          finalError = err instanceof Error ? err : new Error(String(err));
+          
+          try {
+              // Try without any resolution constraints, just request video and audio
+              stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+          } catch (fallbackErr) {
+              console.warn("Failed to get default camera and audio together, trying just video", fallbackErr);
+              finalError = fallbackErr instanceof Error ? fallbackErr : new Error(String(fallbackErr));
+              
+              try {
+                  // Last resort 1: just try to get ANY video stream
+                  stream = await navigator.mediaDevices.getUserMedia({ video: true });
+              } catch (videoOnlyErr) {
+                  console.error("Failed to get even just video", videoOnlyErr);
+                  finalError = videoOnlyErr instanceof Error ? videoOnlyErr : new Error(String(videoOnlyErr));
+                  
+                  try {
+                      // Last resort 2: just try to get ANY audio stream (voice only mode)
+                      console.warn("Trying audio only mode as video failed completely");
+                      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                  } catch (audioOnlyErr) {
+                      console.error("Failed to get audio only", audioOnlyErr);
+                      finalError = audioOnlyErr instanceof Error ? audioOnlyErr : new Error(String(audioOnlyErr));
+                      // If everything fails, throw the most relevant error (usually the video one)
+                      throw finalError; 
+                  }
+              }
+          }
+      }
       
-      if (videoRef.current) {
+      if (!stream) {
+          throw new Error("Failed to initialize any media stream.");
+      }
+
+      if (videoRef.current && stream.getVideoTracks().length > 0) {
         videoRef.current.srcObject = stream;
         await videoRef.current.play();
       }
@@ -624,8 +645,8 @@ const LiveTutor: React.FC = () => {
           const historyData = localStorage.getItem('tutoring_history');
           if (historyData) {
               const history: SavedSession[] = JSON.parse(historyData);
-              // Take the last 5 sessions to keep context manageable
-              const recentHistory = history.slice(0, 5).map(s => {
+              // Take the last 2 sessions to keep context manageable
+              const recentHistory = history.slice(0, 2).map(s => {
                   const date = new Date(s.timestamp).toLocaleDateString();
                   const summary = s.summary 
                       ? `Topic: ${s.summary.overview}, Key Points: ${s.summary.knowledgePoints.join(', ')}`
@@ -767,9 +788,17 @@ const LiveTutor: React.FC = () => {
       });
       sessionPromiseRef.current = sessionPromise;
 
-    } catch (err: any) {
+    } catch (err) {
       console.error(err);
-      setError(err.message || "无法启动会话");
+      if (err instanceof Error && (err.name === 'NotAllowedError' || err.message.includes('Permission denied'))) {
+          setError("无法访问摄像头或麦克风，请在浏览器设置中允许权限。");
+      } else if (err instanceof Error && (err.name === 'NotFoundError' || err.message.includes('Requested device not found'))) {
+          setError("未检测到摄像头或麦克风。请确保设备已连接。");
+      } else if (err instanceof Error && (err.name === 'NotReadableError' || err.message.includes('Could not start video source'))) {
+          setError("无法启动摄像头或麦克风。请检查：1. 是否有其他程序（如Zoom/微信）正在使用它们。2. 尝试重启浏览器或电脑。");
+      } else {
+          setError(err instanceof Error ? err.message : "无法启动会话");
+      }
       setConnectionState(ConnectionState.ERROR);
       stopSession();
     }
@@ -889,7 +918,7 @@ const LiveTutor: React.FC = () => {
   };
 
   return (
-    <div className="flex h-screen w-full bg-gray-950 text-white overflow-hidden">
+    <div className="flex h-screen w-full bg-gray-50 dark:bg-gray-950 text-gray-900 dark:text-white overflow-hidden">
       {/* CSS Animations */}
       <style>{`
         @keyframes shimmer {
@@ -945,7 +974,7 @@ const LiveTutor: React.FC = () => {
             <div className="absolute top-0 left-0 right-0 z-10 p-4 bg-gradient-to-b from-black/70 to-transparent flex justify-between items-center">
                 <div className="flex items-center gap-2">
                     <div className="bg-indigo-600 p-2 rounded-lg">
-                        <Video size={20} className="text-white" />
+                        <Video size={20} className="text-gray-900 dark:text-white" />
                     </div>
                     <h1 className="text-xl font-bold tracking-tight">Live Tutor</h1>
                 </div>
@@ -956,7 +985,7 @@ const LiveTutor: React.FC = () => {
                             connectionState === ConnectionState.CONNECTED ? 'bg-green-500 animate-pulse' : 
                             connectionState === ConnectionState.CONNECTING ? 'bg-yellow-500' : 'bg-red-500'
                         }`}></span>
-                        <span className="text-xs font-medium text-gray-300">
+                        <span className="text-xs font-medium text-gray-600 dark:text-gray-300">
                             {connectionState === ConnectionState.CONNECTED ? '实时连接中' : 
                              connectionState === ConnectionState.CONNECTING ? '连接中...' : '未连接'}
                         </span>
@@ -1009,7 +1038,7 @@ const LiveTutor: React.FC = () => {
                             <ScanEye size={40} className="text-yellow-400" />
                          </div>
                          <div className="text-center">
-                            <h3 className="font-bold text-xl mb-1 text-white">画面有点模糊</h3>
+                            <h3 className="font-bold text-xl mb-1 text-gray-900 dark:text-white">画面有点模糊</h3>
                             <p className="text-sm text-yellow-200/90">请拿稳手机或调整距离，让我看清楚一点</p>
                          </div>
                      </div>
@@ -1022,13 +1051,13 @@ const LiveTutor: React.FC = () => {
                     {insightData.knowledge && (
                         <div 
                             onClick={() => setActivePopup({ type: 'knowledge', content: insightData.knowledge! })}
-                            className="bg-gray-900/80 backdrop-blur-lg border border-indigo-500/40 p-4 rounded-2xl shadow-2xl border-l-4 border-l-indigo-500 transform transition-all hover:scale-105 cursor-pointer hover:bg-gray-800/90 group"
+                            className="bg-white dark:bg-gray-900/80 backdrop-blur-lg border border-indigo-500/40 p-4 rounded-2xl shadow-2xl border-l-4 border-l-indigo-500 transform transition-all hover:scale-105 cursor-pointer hover:bg-gray-100 dark:bg-gray-800/90 group"
                         >
                             <div className="flex items-center gap-2 mb-2 text-indigo-300 font-bold text-sm tracking-wide group-hover:text-indigo-200">
                                 <Lightbulb size={18} className="fill-indigo-500/20" />
                                 <span>核心知识点</span>
                             </div>
-                            <p className="text-gray-100 text-sm leading-relaxed font-medium line-clamp-2">{insightData.knowledge}</p>
+                            <p className="text-gray-800 dark:text-gray-100 text-sm leading-relaxed font-medium line-clamp-2">{insightData.knowledge}</p>
                             <div 
                                 className="text-xs text-indigo-400 mt-2 flex items-center transition-opacity hover:text-indigo-300 hover:underline"
                                 onClick={(e) => {
@@ -1043,14 +1072,14 @@ const LiveTutor: React.FC = () => {
                     {insightData.eye && (
                         <div 
                             onClick={() => setActivePopup({ type: 'eye', content: insightData.eye! })}
-                            className="bg-gray-900/80 backdrop-blur-lg border border-emerald-500/40 p-4 rounded-2xl shadow-2xl border-l-4 border-l-emerald-500 transform transition-all hover:scale-105 cursor-pointer hover:bg-gray-800/90 group" 
+                            className="bg-white dark:bg-gray-900/80 backdrop-blur-lg border border-emerald-500/40 p-4 rounded-2xl shadow-2xl border-l-4 border-l-emerald-500 transform transition-all hover:scale-105 cursor-pointer hover:bg-gray-100 dark:bg-gray-800/90 group" 
                             style={{animationDelay: '150ms'}}
                         >
                             <div className="flex items-center gap-2 mb-2 text-emerald-300 font-bold text-sm tracking-wide group-hover:text-emerald-200">
                                 <Key size={18} className="fill-emerald-500/20" />
                                 <span>解题关键 (题眼)</span>
                             </div>
-                            <p className="text-gray-100 text-sm leading-relaxed font-medium line-clamp-2">{insightData.eye}</p>
+                            <p className="text-gray-800 dark:text-gray-100 text-sm leading-relaxed font-medium line-clamp-2">{insightData.eye}</p>
                             <div 
                                 className="text-xs text-emerald-400 mt-2 flex items-center transition-opacity hover:text-emerald-300 hover:underline"
                                 onClick={(e) => {
@@ -1068,28 +1097,28 @@ const LiveTutor: React.FC = () => {
             {/* Insight Detail Popup */}
             {activePopup && (
                 <div className="absolute inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-in fade-in duration-200">
-                    <div className="bg-gray-900 border border-gray-700 w-full max-w-md rounded-2xl shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200">
+                    <div className="bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 w-full max-w-md rounded-2xl shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200">
                         {/* Popup Header */}
                         <div className={`p-4 flex justify-between items-center ${activePopup.type === 'knowledge' ? 'bg-indigo-900/30' : 'bg-emerald-900/30'} border-b border-white/5`}>
                              <div className={`flex items-center gap-2 font-bold ${activePopup.type === 'knowledge' ? 'text-indigo-300' : 'text-emerald-300'}`}>
                                 {activePopup.type === 'knowledge' ? <Lightbulb size={20} /> : <Key size={20} />}
                                 <span>{activePopup.type === 'knowledge' ? '核心知识点' : '解题关键'}</span>
                              </div>
-                             <button onClick={() => setActivePopup(null)} className="p-1 hover:bg-white/10 rounded-full text-gray-400 hover:text-white transition-colors">
+                             <button onClick={() => setActivePopup(null)} className="p-1 hover:bg-white/10 rounded-full text-gray-400 dark:text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:text-white transition-colors">
                                 <X size={20} />
                              </button>
                         </div>
                         
                         {/* Popup Content */}
                         <div className="p-6">
-                            <p className="text-lg text-gray-100 leading-relaxed font-medium">{activePopup.content}</p>
+                            <p className="text-lg text-gray-800 dark:text-gray-100 leading-relaxed font-medium">{activePopup.content}</p>
                         </div>
 
                         {/* Popup Footer (Actions) */}
                         <div className="p-4 bg-black/20 flex gap-3">
                              <button 
                                 onClick={handleAskExplain}
-                                className="flex-1 flex items-center justify-center gap-2 py-3 px-4 rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white font-semibold transition-all shadow-lg shadow-indigo-600/20 active:scale-95"
+                                className="flex-1 flex items-center justify-center gap-2 py-3 px-4 rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-gray-900 dark:text-white font-semibold transition-all shadow-lg shadow-indigo-600/20 active:scale-95"
                              >
                                 <MessageCircleQuestion size={18} />
                                 让 AI 详细讲解
@@ -1102,21 +1131,21 @@ const LiveTutor: React.FC = () => {
             {/* Session Summary Modal */}
             {showSummaryModal && (
                 <div className="absolute inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-md animate-in fade-in duration-300">
-                    <div className="bg-gray-900 border border-indigo-500/30 w-full max-w-lg rounded-2xl shadow-2xl overflow-hidden animate-in zoom-in-95 duration-300 flex flex-col max-h-[80vh]">
+                    <div className="bg-white dark:bg-gray-900 border border-indigo-500/30 w-full max-w-lg rounded-2xl shadow-2xl overflow-hidden animate-in zoom-in-95 duration-300 flex flex-col max-h-[80vh]">
                         {/* Header */}
-                        <div className="p-5 border-b border-gray-700/50 bg-gradient-to-r from-indigo-900/40 to-gray-900 flex justify-between items-center">
+                        <div className="p-5 border-b border-gray-300 dark:border-gray-700/50 bg-gradient-to-r from-indigo-900/40 to-gray-900 flex justify-between items-center">
                             <div className="flex items-center gap-3">
                                 <div className="bg-indigo-600 p-2 rounded-lg shadow-lg shadow-indigo-600/20">
-                                    <BookOpen size={24} className="text-white" />
+                                    <BookOpen size={24} className="text-gray-900 dark:text-white" />
                                 </div>
                                 <div>
-                                    <h3 className="font-bold text-xl text-white">今日学习报告</h3>
+                                    <h3 className="font-bold text-xl text-gray-900 dark:text-white">今日学习报告</h3>
                                     <p className="text-xs text-indigo-300">AI 智能生成的辅导总结</p>
                                 </div>
                             </div>
                             <button 
                                 onClick={() => setShowSummaryModal(false)} 
-                                className="p-2 hover:bg-white/10 rounded-full text-gray-400 hover:text-white transition-colors"
+                                className="p-2 hover:bg-white/10 rounded-full text-gray-400 dark:text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:text-white transition-colors"
                                 disabled={isGeneratingSummary}
                             >
                                 <X size={20} />
@@ -1128,16 +1157,16 @@ const LiveTutor: React.FC = () => {
                             {isGeneratingSummary ? (
                                 <div className="flex flex-col items-center justify-center h-48 gap-4">
                                     <Loader2 size={40} className="animate-spin text-indigo-500" />
-                                    <p className="text-gray-400 animate-pulse">正在整理学习笔记，请稍候...</p>
+                                    <p className="text-gray-400 dark:text-gray-500 dark:text-gray-400 animate-pulse">正在整理学习笔记，请稍候...</p>
                                 </div>
                             ) : sessionSummary ? (
                                 <div className="space-y-6 animate-in slide-in-from-bottom-4 duration-500">
                                     {/* Overview Section */}
-                                    <div className="bg-gray-800/50 rounded-xl p-4 border border-gray-700">
+                                    <div className="bg-gray-100 dark:bg-gray-800/50 rounded-xl p-4 border border-gray-300 dark:border-gray-700">
                                         <h4 className="text-indigo-400 text-sm font-bold uppercase tracking-wider mb-2 flex items-center gap-2">
                                             <FileText size={16} /> 学习概览
                                         </h4>
-                                        <p className="text-gray-200 leading-relaxed text-sm">
+                                        <p className="text-gray-700 dark:text-gray-200 leading-relaxed text-sm">
                                             {sessionSummary.overview}
                                         </p>
                                     </div>
@@ -1149,11 +1178,11 @@ const LiveTutor: React.FC = () => {
                                         </h4>
                                         <ul className="space-y-2">
                                             {sessionSummary.knowledgePoints.map((point, idx) => (
-                                                <li key={idx} className="flex gap-3 items-start bg-gray-800/30 p-3 rounded-lg border border-gray-700/50 hover:border-emerald-500/30 transition-colors">
+                                                <li key={idx} className="flex gap-3 items-start bg-gray-100 dark:bg-gray-800/30 p-3 rounded-lg border border-gray-300 dark:border-gray-700/50 hover:border-emerald-500/30 transition-colors">
                                                     <span className="flex-shrink-0 w-5 h-5 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center text-xs font-bold mt-0.5">
                                                         {idx + 1}
                                                     </span>
-                                                    <span className="text-gray-300 text-sm">{point}</span>
+                                                    <span className="text-gray-600 dark:text-gray-300 text-sm">{point}</span>
                                                 </li>
                                             ))}
                                         </ul>
@@ -1164,18 +1193,18 @@ const LiveTutor: React.FC = () => {
                                     </div>
                                 </div>
                             ) : (
-                                <div className="text-center text-gray-500 py-10">
+                                <div className="text-center text-gray-400 dark:text-gray-500 py-10">
                                     <p>暂无总结内容</p>
                                 </div>
                             )}
                         </div>
 
                         {/* Footer */}
-                        <div className="p-4 bg-gray-800/50 border-t border-gray-700/50 flex justify-end">
+                        <div className="p-4 bg-gray-100 dark:bg-gray-800/50 border-t border-gray-300 dark:border-gray-700/50 flex justify-end">
                             <button 
                                 onClick={() => setShowSummaryModal(false)}
                                 disabled={isGeneratingSummary}
-                                className="px-6 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                className="px-6 py-2 bg-indigo-600 hover:bg-indigo-500 text-gray-900 dark:text-white rounded-lg font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                             >
                                 完成
                             </button>
@@ -1190,7 +1219,7 @@ const LiveTutor: React.FC = () => {
                     {/* Mirror Toggle */}
                     <button 
                         onClick={() => setIsVideoMirrored(!isVideoMirrored)}
-                        className={`p-3 rounded-full text-white backdrop-blur-md border border-white/10 transition-all ${isVideoMirrored ? 'bg-indigo-600/80 hover:bg-indigo-600' : 'bg-black/50 hover:bg-black/70'}`}
+                        className={`p-3 rounded-full text-gray-900 dark:text-white backdrop-blur-md border border-white/10 transition-all ${isVideoMirrored ? 'bg-indigo-600/80 hover:bg-indigo-600' : 'bg-black/50 hover:bg-black/70'}`}
                         title={isVideoMirrored ? "关闭镜像" : "开启镜像"}
                     >
                         <FlipHorizontal size={20} />
@@ -1202,7 +1231,7 @@ const LiveTutor: React.FC = () => {
                             setShowProfileModal(true);
                             setShowSettings(false);
                         }}
-                        className="p-3 rounded-full bg-black/50 hover:bg-black/70 text-white backdrop-blur-md border border-white/10 transition-all group relative"
+                        className="p-3 rounded-full bg-black/50 hover:bg-black/70 text-gray-900 dark:text-white backdrop-blur-md border border-white/10 transition-all group relative"
                         title="个人资料"
                     >
                         <UserRoundPen size={20} />
@@ -1219,7 +1248,7 @@ const LiveTutor: React.FC = () => {
                             setShowSettings(!showSettings);
                             setShowProfileModal(false);
                         }}
-                        className="p-3 rounded-full bg-black/50 hover:bg-black/70 text-white backdrop-blur-md border border-white/10 transition-all"
+                        className="p-3 rounded-full bg-black/50 hover:bg-black/70 text-gray-900 dark:text-white backdrop-blur-md border border-white/10 transition-all"
                         title="设置"
                     >
                         <Settings size={20} />
@@ -1228,14 +1257,14 @@ const LiveTutor: React.FC = () => {
                     {/* Settings Dropdown */}
                     {showSettings && (
                         <div className="flex flex-col gap-2 p-3 rounded-2xl bg-black/60 backdrop-blur-xl border border-white/10 animate-in fade-in zoom-in duration-200 w-64 shadow-2xl">
-                            <div className="text-xs font-semibold text-gray-400 mb-1 uppercase tracking-wider">摄像头设置</div>
+                            <div className="text-xs font-semibold text-gray-400 dark:text-gray-500 dark:text-gray-400 mb-1 uppercase tracking-wider">摄像头设置</div>
                             
                             {/* Device Selector */}
                             <div className="relative mb-2">
                                 <select 
                                     value={selectedCameraId}
                                     onChange={(e) => switchCamera(e.target.value)}
-                                    className="w-full bg-gray-800/80 text-white text-sm rounded-lg p-2 pl-8 outline-none border border-gray-700 hover:border-indigo-500 appearance-none"
+                                    className="w-full bg-gray-100 dark:bg-gray-800/80 text-gray-900 dark:text-white text-sm rounded-lg p-2 pl-8 outline-none border border-gray-300 dark:border-gray-700 hover:border-indigo-500 appearance-none"
                                 >
                                     {videoDevices.map(device => (
                                         <option key={device.deviceId} value={device.deviceId}>
@@ -1243,30 +1272,30 @@ const LiveTutor: React.FC = () => {
                                         </option>
                                     ))}
                                 </select>
-                                <Camera size={14} className="absolute left-2.5 top-2.5 text-gray-400 pointer-events-none" />
+                                <Camera size={14} className="absolute left-2.5 top-2.5 text-gray-400 dark:text-gray-500 dark:text-gray-400 pointer-events-none" />
                             </div>
 
                             {/* Smart Quality Toggle */}
                             <div className="mb-2">
                                  <button 
                                     onClick={() => setIsAutoQuality(!isAutoQuality)}
-                                    className={`w-full flex items-center justify-between p-2 rounded-lg text-sm transition-colors ${isAutoQuality ? 'bg-emerald-600/30 text-emerald-200' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'}`}
+                                    className={`w-full flex items-center justify-between p-2 rounded-lg text-sm transition-colors ${isAutoQuality ? 'bg-emerald-600/30 text-emerald-200' : 'bg-gray-100 dark:bg-gray-800 text-gray-400 dark:text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:bg-gray-700'}`}
                                  >
                                      <div className="flex items-center gap-2">
                                          <Wifi size={16} />
                                          <span>智能画质调节</span>
                                      </div>
-                                     <div className={`w-8 h-4 rounded-full relative transition-colors ${isAutoQuality ? 'bg-emerald-500' : 'bg-gray-600'}`}>
+                                     <div className={`w-8 h-4 rounded-full relative transition-colors ${isAutoQuality ? 'bg-emerald-500' : 'bg-gray-300 dark:bg-gray-600'}`}>
                                          <div className={`absolute top-0.5 w-3 h-3 bg-white rounded-full transition-all ${isAutoQuality ? 'left-4.5' : 'left-0.5'}`} style={{left: isAutoQuality ? '18px' : '2px'}} />
                                      </div>
                                  </button>
                                  {isAutoQuality && (
                                     <div className="mt-1 px-2 flex justify-between items-center text-[10px]">
-                                        <span className="text-gray-500">当前网络:</span>
+                                        <span className="text-gray-400 dark:text-gray-500">当前网络:</span>
                                         <span className={`font-medium ${
                                             networkStatus === 'good' ? 'text-green-400' : 
                                             networkStatus === 'moderate' ? 'text-yellow-400' : 
-                                            networkStatus === 'poor' ? 'text-red-400' : 'text-gray-400'
+                                            networkStatus === 'poor' ? 'text-red-400' : 'text-gray-400 dark:text-gray-500 dark:text-gray-400'
                                         }`}>
                                             {networkStatus === 'good' ? '极佳' : networkStatus === 'moderate' ? '一般' : networkStatus === 'poor' ? '较差' : '未知'}
                                         </span>
@@ -1276,7 +1305,7 @@ const LiveTutor: React.FC = () => {
 
                             {/* Frame Rate / Speed Slider */}
                             <div className={`mb-3 px-1 transition-opacity ${isAutoQuality ? 'opacity-50 pointer-events-none' : 'opacity-100'}`}>
-                                <div className="flex items-center justify-between text-xs text-gray-400 mb-2">
+                                <div className="flex items-center justify-between text-xs text-gray-400 dark:text-gray-500 dark:text-gray-400 mb-2">
                                     <div className="flex items-center gap-1">
                                         <Gauge size={14} />
                                         <span>{isAutoQuality ? "识别速度 (自动)" : "识别速度 (手动)"}</span>
@@ -1290,7 +1319,7 @@ const LiveTutor: React.FC = () => {
                                     step="0.5" 
                                     value={videoFrameRate}
                                     onChange={(e) => setVideoFrameRate(parseFloat(e.target.value))}
-                                    className="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-indigo-500 hover:accent-indigo-400 transition-all"
+                                    className="w-full h-1.5 bg-gray-200 dark:bg-gray-700 rounded-lg appearance-none cursor-pointer accent-indigo-500 hover:accent-indigo-400 transition-all"
                                 />
                                 <div className="flex justify-between text-[10px] text-gray-600 mt-1 font-medium">
                                     <span>省流</span>
@@ -1298,18 +1327,18 @@ const LiveTutor: React.FC = () => {
                                 </div>
                             </div>
 
-                            <div className="h-px bg-gray-700/50 my-2" />
+                            <div className="h-px bg-gray-200 dark:bg-gray-700/50 my-2" />
 
                             {/* Mirror Toggle */}
                             <button 
                                 onClick={() => setIsVideoMirrored(!isVideoMirrored)}
-                                className={`flex items-center justify-between p-2 rounded-lg text-sm transition-colors ${isVideoMirrored ? 'bg-indigo-600/30 text-indigo-200' : 'hover:bg-gray-700/50'}`}
+                                className={`flex items-center justify-between p-2 rounded-lg text-sm transition-colors ${isVideoMirrored ? 'bg-indigo-600/30 text-indigo-200' : 'hover:bg-gray-200 dark:bg-gray-700/50'}`}
                             >
                                 <div className="flex items-center gap-2">
                                     <RefreshCw size={16} />
                                     <span>镜像画面</span>
                                 </div>
-                                <div className={`w-8 h-4 rounded-full relative transition-colors ${isVideoMirrored ? 'bg-indigo-500' : 'bg-gray-600'}`}>
+                                <div className={`w-8 h-4 rounded-full relative transition-colors ${isVideoMirrored ? 'bg-indigo-500' : 'bg-gray-300 dark:bg-gray-600'}`}>
                                     <div className={`absolute top-0.5 w-3 h-3 bg-white rounded-full transition-all ${isVideoMirrored ? 'left-4.5' : 'left-0.5'}`} style={{left: isVideoMirrored ? '18px' : '2px'}} />
                                 </div>
                             </button>
@@ -1317,13 +1346,13 @@ const LiveTutor: React.FC = () => {
                             {/* Speaker Mute Toggle */}
                             <button 
                                 onClick={() => setIsSpeakerMuted(!isSpeakerMuted)}
-                                className={`flex items-center justify-between p-2 rounded-lg text-sm transition-colors ${isSpeakerMuted ? 'bg-red-500/20 text-red-200' : 'hover:bg-gray-700/50'}`}
+                                className={`flex items-center justify-between p-2 rounded-lg text-sm transition-colors ${isSpeakerMuted ? 'bg-red-500/20 text-red-200' : 'hover:bg-gray-200 dark:bg-gray-700/50'}`}
                             >
                                 <div className="flex items-center gap-2">
                                     {isSpeakerMuted ? <VolumeX size={16} /> : <Volume2 size={16} />}
                                     <span>AI 语音播放</span>
                                 </div>
-                                <div className={`w-8 h-4 rounded-full relative transition-colors ${!isSpeakerMuted ? 'bg-green-500' : 'bg-gray-600'}`}>
+                                <div className={`w-8 h-4 rounded-full relative transition-colors ${!isSpeakerMuted ? 'bg-green-500' : 'bg-gray-300 dark:bg-gray-600'}`}>
                                     <div className={`absolute top-0.5 w-3 h-3 bg-white rounded-full transition-all`} style={{left: !isSpeakerMuted ? '18px' : '2px'}} />
                                 </div>
                             </button>
@@ -1335,13 +1364,13 @@ const LiveTutor: React.FC = () => {
             {/* Profile Edit Modal */}
             {showProfileModal && (
                 <div className="absolute inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
-                    <div className="bg-gray-900 border border-gray-700 w-full max-w-sm rounded-2xl shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200 max-h-[90vh] flex flex-col">
-                        <div className="p-4 border-b border-gray-700/50 flex justify-between items-center bg-gray-800/50 flex-shrink-0">
-                            <h3 className="font-bold text-lg text-white flex items-center gap-2">
+                    <div className="bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 w-full max-w-sm rounded-2xl shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200 max-h-[90vh] flex flex-col">
+                        <div className="p-4 border-b border-gray-300 dark:border-gray-700/50 flex justify-between items-center bg-gray-100 dark:bg-gray-800/50 flex-shrink-0">
+                            <h3 className="font-bold text-lg text-gray-900 dark:text-white flex items-center gap-2">
                                 <UserRoundPen size={20} className="text-indigo-400" />
                                 个人资料设置
                             </h3>
-                            <button onClick={() => setShowProfileModal(false)} className="p-1 hover:bg-white/10 rounded-full text-gray-400 hover:text-white transition-colors">
+                            <button onClick={() => setShowProfileModal(false)} className="p-1 hover:bg-white/10 rounded-full text-gray-400 dark:text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:text-white transition-colors">
                                 <X size={20} />
                             </button>
                         </div>
@@ -1349,7 +1378,7 @@ const LiveTutor: React.FC = () => {
                         <div className="p-6 space-y-6 overflow-y-auto">
                             {/* Avatar Selection */}
                             <div>
-                                <label className="block text-sm font-medium text-gray-400 mb-2">选择头像</label>
+                                <label className="block text-sm font-medium text-gray-400 dark:text-gray-500 dark:text-gray-400 mb-2">选择头像</label>
                                 <div className="grid grid-cols-5 gap-2">
                                     {AVATAR_OPTIONS.map(avatar => (
                                         <button
@@ -1358,7 +1387,7 @@ const LiveTutor: React.FC = () => {
                                             className={`h-10 w-10 flex items-center justify-center text-xl rounded-full transition-all ${
                                                 userProfile.avatar === avatar 
                                                 ? 'bg-indigo-600 ring-2 ring-indigo-300 ring-offset-2 ring-offset-gray-900' 
-                                                : 'bg-gray-800 hover:bg-gray-700'
+                                                : 'bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:bg-gray-700'
                                             }`}
                                         >
                                             {avatar}
@@ -1369,32 +1398,32 @@ const LiveTutor: React.FC = () => {
 
                             {/* Name Input */}
                             <div>
-                                <label className="block text-sm font-medium text-gray-400 mb-1">昵称 / 名字</label>
+                                <label className="block text-sm font-medium text-gray-400 dark:text-gray-500 dark:text-gray-400 mb-1">昵称 / 名字</label>
                                 <input
                                     type="text"
                                     value={userProfile.name}
                                     onChange={(e) => saveProfile({...userProfile, name: e.target.value})}
                                     placeholder="比如: 小明"
-                                    className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all"
+                                    className="w-full bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg px-4 py-2 text-gray-900 dark:text-white focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all"
                                 />
                             </div>
 
                             {/* Age Input */}
                             <div>
-                                <label className="block text-sm font-medium text-gray-400 mb-1">年龄 (岁)</label>
+                                <label className="block text-sm font-medium text-gray-400 dark:text-gray-500 dark:text-gray-400 mb-1">年龄 (岁)</label>
                                 <input
                                     type="number"
                                     value={userProfile.age}
                                     onChange={(e) => saveProfile({...userProfile, age: e.target.value})}
                                     placeholder="AI 将根据年龄调整讲解难度"
-                                    className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all"
+                                    className="w-full bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg px-4 py-2 text-gray-900 dark:text-white focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all"
                                 />
-                                <p className="text-xs text-gray-500 mt-1">设置年龄后，AI 会使用更适合该年龄段的语言。</p>
+                                <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">设置年龄后，AI 会使用更适合该年龄段的语言。</p>
                             </div>
 
                             {/* Voice Selection */}
                             <div>
-                                <label className="block text-sm font-medium text-gray-400 mb-2">选择 AI 语音</label>
+                                <label className="block text-sm font-medium text-gray-400 dark:text-gray-500 dark:text-gray-400 mb-2">选择 AI 语音</label>
                                 <div className="grid grid-cols-1 gap-2 max-h-40 overflow-y-auto pr-1">
                                     {VOICE_OPTIONS.map(voice => (
                                         <button
@@ -1402,18 +1431,18 @@ const LiveTutor: React.FC = () => {
                                             onClick={() => saveProfile({...userProfile, voiceName: voice.id})}
                                             className={`flex items-center justify-between px-4 py-3 rounded-xl border transition-all ${
                                                 (userProfile.voiceName || 'Kore') === voice.id 
-                                                ? 'bg-indigo-600/20 border-indigo-500 text-white' 
-                                                : 'bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700 hover:border-gray-600'
+                                                ? 'bg-indigo-600/20 border-indigo-500 text-gray-900 dark:text-white' 
+                                                : 'bg-gray-100 dark:bg-gray-800 border-gray-300 dark:border-gray-700 text-gray-400 dark:text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:bg-gray-700 hover:border-gray-400 dark:border-gray-600'
                                             }`}
                                         >
                                             <div className="flex flex-col items-start">
                                                 <div className="flex items-center gap-2">
-                                                    <span className={`text-sm font-semibold ${(userProfile.voiceName || 'Kore') === voice.id ? 'text-indigo-300' : 'text-gray-300'}`}>
+                                                    <span className={`text-sm font-semibold ${(userProfile.voiceName || 'Kore') === voice.id ? 'text-indigo-300' : 'text-gray-600 dark:text-gray-300'}`}>
                                                         {voice.name}
                                                     </span>
                                                     {voice.gender === 'Female' ? <span className="text-xs text-rose-400 bg-rose-900/30 px-1 rounded">女声</span> : <span className="text-xs text-blue-400 bg-blue-900/30 px-1 rounded">男声</span>}
                                                 </div>
-                                                <span className="text-xs text-gray-500 mt-1">{voice.desc}</span>
+                                                <span className="text-xs text-gray-400 dark:text-gray-500 mt-1">{voice.desc}</span>
                                             </div>
                                             {(userProfile.voiceName || 'Kore') === voice.id ? (
                                                 <div className="flex items-center gap-2 text-indigo-400">
@@ -1430,10 +1459,10 @@ const LiveTutor: React.FC = () => {
 
                         </div>
 
-                        <div className="p-4 bg-gray-800/30 border-t border-gray-700/50 flex-shrink-0">
+                        <div className="p-4 bg-gray-100 dark:bg-gray-800/30 border-t border-gray-300 dark:border-gray-700/50 flex-shrink-0">
                             <button 
                                 onClick={() => setShowProfileModal(false)}
-                                className="w-full py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-medium transition-colors flex items-center justify-center gap-2"
+                                className="w-full py-2 bg-indigo-600 hover:bg-indigo-500 text-gray-900 dark:text-white rounded-lg font-medium transition-colors flex items-center justify-center gap-2"
                             >
                                 <Check size={16} />
                                 保存并关闭
@@ -1462,8 +1491,8 @@ const LiveTutor: React.FC = () => {
                         <div className={`
                             relative flex items-center gap-3 px-6 py-3 rounded-full border backdrop-blur-md transition-all duration-500 shadow-xl
                             ${isBotSpeaking 
-                                ? 'bg-emerald-500 border-emerald-400 text-white ripple-effect scale-110' 
-                                : 'bg-gray-900/80 border-indigo-500/30 text-indigo-100'
+                                ? 'bg-emerald-500 border-emerald-400 text-gray-900 dark:text-white ripple-effect scale-110' 
+                                : 'bg-white dark:bg-gray-900/80 border-indigo-500/30 text-indigo-100'
                             }
                         `}>
                             {isBotSpeaking ? (
@@ -1505,7 +1534,7 @@ const LiveTutor: React.FC = () => {
                             <h1 className="text-5xl md:text-7xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 via-indigo-500 to-purple-500 mb-6 tracking-tight drop-shadow-2xl">
                                 未来的学习体验
                             </h1>
-                            <p className="text-gray-200 text-xl md:text-2xl font-light leading-relaxed drop-shadow-md">
+                            <p className="text-gray-700 dark:text-gray-200 text-xl md:text-2xl font-light leading-relaxed drop-shadow-md">
                                 实时连接 AI 导师。使用视频进行互动讲解，为您提供个性化的辅导体验。
                             </p>
                         </div>
@@ -1516,12 +1545,12 @@ const LiveTutor: React.FC = () => {
                                 {/* Glow effect */}
                                 <div className="absolute -inset-1 bg-gradient-to-r from-indigo-500 to-purple-600 rounded-[2rem] blur opacity-75 group-hover:opacity-100 transition duration-1000 group-hover:duration-200"></div>
                                 
-                                <div className="relative px-8 py-6 bg-gray-900 ring-1 ring-gray-800 rounded-[2rem] flex items-center gap-6 shadow-2xl">
+                                <div className="relative px-8 py-6 bg-white dark:bg-gray-900 ring-1 ring-gray-200 dark:ring-gray-800 rounded-[2rem] flex items-center gap-6 shadow-2xl">
                                     <div className="relative">
-                                        <div className="w-24 h-24 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-5xl shadow-inner border-4 border-gray-800">
+                                        <div className="w-24 h-24 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-5xl shadow-inner border-4 border-gray-200 dark:border-gray-800">
                                             {userProfile.avatar || '🎓'}
                                         </div>
-                                        <div className="absolute -bottom-2 -right-2 bg-green-500 text-white text-xs font-bold px-2 py-1 rounded-full border-2 border-gray-900 flex items-center gap-1">
+                                        <div className="absolute -bottom-2 -right-2 bg-green-500 text-gray-900 dark:text-white text-xs font-bold px-2 py-1 rounded-full border-2 border-gray-900 flex items-center gap-1">
                                             <div className="w-2 h-2 bg-white rounded-full animate-pulse"></div>
                                             在线
                                         </div>
@@ -1531,11 +1560,11 @@ const LiveTutor: React.FC = () => {
                                         <div className="text-xs text-indigo-400 font-bold uppercase tracking-widest mb-1 flex items-center gap-1">
                                             <ScanEye size={12} /> 学习指纹档案
                                         </div>
-                                        <h2 className="text-3xl font-bold text-white mb-1">
+                                        <h2 className="text-3xl font-bold text-gray-900 dark:text-white mb-1">
                                             {userProfile.name || '新同学'}
                                         </h2>
-                                        <div className="flex items-center gap-3 text-gray-400 text-sm">
-                                            <span className="bg-gray-800 px-2 py-0.5 rounded text-xs border border-gray-700">
+                                        <div className="flex items-center gap-3 text-gray-400 dark:text-gray-500 dark:text-gray-400 text-sm">
+                                            <span className="bg-gray-100 dark:bg-gray-800 px-2 py-0.5 rounded text-xs border border-gray-300 dark:border-gray-700">
                                                 {userProfile.age ? `${userProfile.age}岁` : '未设置年龄'}
                                             </span>
                                             <span>•</span>
@@ -1545,7 +1574,7 @@ const LiveTutor: React.FC = () => {
                                         </div>
                                     </div>
                                     
-                                    <div className="ml-4 pl-6 border-l border-gray-700 flex flex-col items-center gap-1 text-gray-500 group-hover:text-indigo-400 transition-colors">
+                                    <div className="ml-4 pl-6 border-l border-gray-300 dark:border-gray-700 flex flex-col items-center gap-1 text-gray-400 dark:text-gray-500 group-hover:text-indigo-400 transition-colors">
                                         <Settings size={20} />
                                         <span className="text-xs">设置</span>
                                     </div>
@@ -1567,13 +1596,13 @@ const LiveTutor: React.FC = () => {
             {/* Error State */}
             {error && (
                 <div className="absolute inset-0 flex items-center justify-center bg-black/80 z-40">
-                     <div className="text-center p-6 bg-gray-900 border border-red-900/50 rounded-xl max-w-md shadow-2xl">
+                     <div className="text-center p-6 bg-white dark:bg-gray-900 border border-red-900/50 rounded-xl max-w-md shadow-2xl">
                         <AlertCircle size={40} className="text-red-500 mx-auto mb-4" />
                         <h3 className="text-xl font-bold text-red-400 mb-2">出错了</h3>
-                        <p className="text-gray-300 mb-6">{error}</p>
+                        <p className="text-gray-600 dark:text-gray-300 mb-6">{error}</p>
                         <button 
                             onClick={() => setError(null)}
-                            className="px-6 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm transition-colors"
+                            className="px-6 py-2 bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:bg-gray-600 rounded-lg text-sm transition-colors"
                         >
                             关闭
                         </button>
@@ -1584,7 +1613,7 @@ const LiveTutor: React.FC = () => {
 
         {/* Controls Bar - Only show when connected */}
         {connectionState !== ConnectionState.DISCONNECTED && (
-            <div className="h-24 bg-gray-900 border-t border-gray-800 flex items-center justify-center gap-6 px-4 z-20">
+            <div className="h-24 bg-white dark:bg-gray-900 border-t border-gray-200 dark:border-gray-800 flex items-center justify-center gap-6 px-4 z-20">
                 {connectionState === ConnectionState.CONNECTED ? (
                     <>
                         <div className="flex items-center gap-4">
@@ -1603,7 +1632,7 @@ const LiveTutor: React.FC = () => {
                                 className={`p-4 rounded-full transition-all duration-300 ${
                                     isMicMuted 
                                     ? 'bg-red-500/20 text-red-500 hover:bg-red-500/30 ring-2 ring-red-500/50' 
-                                    : 'bg-gray-800 text-white hover:bg-gray-700 hover:scale-110 active:scale-95'
+                                    : 'bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-white hover:bg-gray-200 dark:bg-gray-700 hover:scale-110 active:scale-95'
                                 }`}
                                 title={isMicMuted ? "取消静音" : "静音"}
                             >
@@ -1615,16 +1644,16 @@ const LiveTutor: React.FC = () => {
                             <button 
                                 onClick={() => saveSessionToHistory(true)}
                                 disabled={messages.length === 0}
-                                className={`p-4 rounded-full text-white transition-all relative group ${
+                                className={`p-4 rounded-full text-gray-900 dark:text-white transition-all relative group ${
                                     messages.length === 0 
-                                    ? 'bg-gray-800 opacity-50 cursor-not-allowed' 
-                                    : 'bg-gray-800 hover:bg-gray-700 hover:scale-110 active:scale-95'
+                                    ? 'bg-gray-100 dark:bg-gray-800 opacity-50 cursor-not-allowed' 
+                                    : 'bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:bg-gray-700 hover:scale-110 active:scale-95'
                                 }`}
                                 title="保存当前对话"
                             >
                                 <Save size={24} className={showSaveConfirm ? "text-green-500 transition-colors" : ""} />
                                 {showSaveConfirm && (
-                                    <span className="absolute -top-10 left-1/2 transform -translate-x-1/2 text-xs font-bold bg-green-500/90 text-white px-3 py-1.5 rounded-lg shadow-lg animate-in fade-in slide-in-from-bottom-2 whitespace-nowrap z-50">
+                                    <span className="absolute -top-10 left-1/2 transform -translate-x-1/2 text-xs font-bold bg-green-500/90 text-gray-900 dark:text-white px-3 py-1.5 rounded-lg shadow-lg animate-in fade-in slide-in-from-bottom-2 whitespace-nowrap z-50">
                                         已保存
                                     </span>
                                 )}
@@ -1632,7 +1661,7 @@ const LiveTutor: React.FC = () => {
 
                             <button 
                                 onClick={stopSession}
-                                className="p-4 rounded-full bg-red-600 text-white hover:bg-red-500 transition-all shadow-lg hover:shadow-red-600/20 hover:scale-110 active:scale-95"
+                                className="p-4 rounded-full bg-red-600 text-gray-900 dark:text-white hover:bg-red-500 transition-all shadow-lg hover:shadow-red-600/20 hover:scale-110 active:scale-95"
                                 title="结束会话"
                             >
                                 <Square size={24} fill="currentColor" />
@@ -1640,7 +1669,7 @@ const LiveTutor: React.FC = () => {
                         </div>
                     </>
                 ) : (
-                    <div className="text-sm text-gray-500 italic">
+                    <div className="text-sm text-gray-400 dark:text-gray-500 italic">
                         {connectionState === ConnectionState.CONNECTING ? "正在建立连接..." : "等待开始..."}
                     </div>
                 )}

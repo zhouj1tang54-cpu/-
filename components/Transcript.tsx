@@ -67,7 +67,7 @@ const Transcript: React.FC<TranscriptProps> = ({ messages, userProfile }) => {
   const MessageList = ({ msgs }: { msgs: ChatMessage[] }) => (
     <div className="flex-1 overflow-y-auto p-4 space-y-4">
       {msgs.length === 0 ? (
-         <div className="text-gray-500 text-center mt-10 text-sm">
+         <div className="text-gray-400 dark:text-gray-500 text-center mt-10 text-sm">
            <p>暂无消息内容。</p>
          </div>
       ) : (
@@ -99,7 +99,7 @@ const Transcript: React.FC<TranscriptProps> = ({ messages, userProfile }) => {
               className={`p-4 rounded-xl text-lg leading-relaxed max-w-[90%] shadow-md ${
                 msg.role === 'user'
                   ? 'bg-indigo-900/50 text-indigo-100 border border-indigo-500/20'
-                  : 'bg-gray-800 text-gray-100 border border-gray-700'
+                  : 'bg-gray-100 dark:bg-gray-800 text-gray-800 dark:text-gray-100 border border-gray-300 dark:border-gray-700'
               }`}
             >
               <div className="whitespace-pre-wrap tracking-wide markdown-body">
@@ -122,22 +122,22 @@ const Transcript: React.FC<TranscriptProps> = ({ messages, userProfile }) => {
   );
 
   return (
-    <div className="flex flex-col h-full bg-gray-900 border-l border-gray-700 overflow-hidden w-80 md:w-96">
+    <div className="flex flex-col h-full bg-white dark:bg-gray-900 border-l border-gray-300 dark:border-gray-700 overflow-hidden w-80 md:w-96">
       
       {/* Header */}
-      <div className="p-4 border-b border-gray-700 bg-gray-800 flex justify-between items-center shadow-md z-10">
+      <div className="p-4 border-b border-gray-300 dark:border-gray-700 bg-gray-100 dark:bg-gray-800 flex justify-between items-center shadow-md z-10">
         <div className="flex items-center gap-2">
             {viewMode === 'history_detail' ? (
                 <button 
                   onClick={() => setViewMode('history_list')}
-                  className="p-1 hover:bg-gray-700 rounded-full transition-colors"
+                  className="p-1 hover:bg-gray-200 dark:bg-gray-700 rounded-full transition-colors"
                 >
                     <ChevronLeft size={20} />
                 </button>
             ) : (
                 <MessageSquare size={18} className="text-indigo-400" />
             )}
-            <h2 className="font-semibold text-lg text-white">
+            <h2 className="font-semibold text-lg text-gray-900 dark:text-white">
                 {viewMode === 'live' ? '实时对话' : 
                  viewMode === 'history_list' ? '历史记录' : '对话回顾'}
             </h2>
@@ -148,8 +148,8 @@ const Transcript: React.FC<TranscriptProps> = ({ messages, userProfile }) => {
                 onClick={handleToggleHistory}
                 className={`p-2 rounded-lg transition-colors ${
                     viewMode === 'live' 
-                    ? 'hover:bg-gray-700 text-gray-400 hover:text-white' 
-                    : 'bg-indigo-600 text-white hover:bg-indigo-500'
+                    ? 'hover:bg-gray-200 dark:bg-gray-700 text-gray-400 dark:text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:text-white' 
+                    : 'bg-indigo-600 text-gray-900 dark:text-white hover:bg-indigo-500'
                 }`}
                 title={viewMode === 'live' ? "查看历史" : "返回实时"}
             >
@@ -163,7 +163,7 @@ const Transcript: React.FC<TranscriptProps> = ({ messages, userProfile }) => {
         <>
             <div className="flex-1 overflow-y-auto relative">
                 {messages.length === 0 && (
-                    <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-500 p-6 text-center">
+                    <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-400 dark:text-gray-500 p-6 text-center">
                         <MessageSquare size={48} className="mb-4 opacity-20" />
                         <p className="mb-2">尚未开始对话。</p>
                         <p className="text-xs text-gray-600">点击屏幕下方的“开始辅导”按钮，并对准题目即可开始。</p>
@@ -177,7 +177,7 @@ const Transcript: React.FC<TranscriptProps> = ({ messages, userProfile }) => {
       {viewMode === 'history_list' && (
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
             {savedSessions.length === 0 ? (
-                <div className="text-gray-500 text-center mt-20 text-sm">
+                <div className="text-gray-400 dark:text-gray-500 text-center mt-20 text-sm">
                     <History size={48} className="mx-auto mb-4 opacity-20" />
                     <p>暂无历史记录</p>
                 </div>
@@ -189,7 +189,7 @@ const Transcript: React.FC<TranscriptProps> = ({ messages, userProfile }) => {
                             setSelectedSession(session);
                             setViewMode('history_detail');
                         }}
-                        className="bg-gray-800 border border-gray-700 rounded-xl p-4 cursor-pointer hover:bg-gray-750 hover:border-indigo-500/50 transition-all group relative"
+                        className="bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-xl p-4 cursor-pointer hover:bg-gray-50 dark:bg-gray-750 hover:border-indigo-500/50 transition-all group relative"
                     >
                         <div className="flex justify-between items-start mb-2">
                              <div className="flex items-center gap-2 text-xs text-indigo-300 bg-indigo-900/30 px-2 py-1 rounded">
@@ -204,14 +204,14 @@ const Transcript: React.FC<TranscriptProps> = ({ messages, userProfile }) => {
                                 <Trash2 size={16} />
                              </button>
                         </div>
-                        <p className="text-sm text-gray-300 line-clamp-2">
+                        <p className="text-sm text-gray-600 dark:text-gray-300 line-clamp-2">
                             {session.summary?.overview 
                                 ? <span className="text-emerald-300 font-medium">【总结】{session.summary.overview.slice(0, 30)}...</span>
                                 : (session.preview || "（无文本内容）")
                             }
                         </p>
                         <div className="mt-3 flex items-center justify-between">
-                            <div className="flex items-center gap-2 text-xs text-gray-500">
+                            <div className="flex items-center gap-2 text-xs text-gray-400 dark:text-gray-500">
                                 <MessageSquare size={12} />
                                 <span>{session.messages.length} 条对话</span>
                             </div>
@@ -230,7 +230,7 @@ const Transcript: React.FC<TranscriptProps> = ({ messages, userProfile }) => {
 
       {viewMode === 'history_detail' && selectedSession && (
           <div className="flex-1 overflow-y-auto flex flex-col">
-               <div className="bg-gray-800/50 p-2 text-center text-xs text-gray-400 border-b border-gray-700/50">
+               <div className="bg-gray-100 dark:bg-gray-800/50 p-2 text-center text-xs text-gray-400 dark:text-gray-500 dark:text-gray-400 border-b border-gray-300 dark:border-gray-700/50">
                   {new Date(selectedSession.timestamp).toLocaleString('zh-CN')}
                </div>
                
@@ -242,15 +242,15 @@ const Transcript: React.FC<TranscriptProps> = ({ messages, userProfile }) => {
                        </h3>
                        
                        <div className="mb-3">
-                           <h4 className="text-xs font-semibold text-gray-400 mb-1 uppercase">概览</h4>
-                           <p className="text-sm text-gray-300 leading-relaxed">{selectedSession.summary.overview}</p>
+                           <h4 className="text-xs font-semibold text-gray-400 dark:text-gray-500 dark:text-gray-400 mb-1 uppercase">概览</h4>
+                           <p className="text-sm text-gray-600 dark:text-gray-300 leading-relaxed">{selectedSession.summary.overview}</p>
                        </div>
                        
                        <div>
-                           <h4 className="text-xs font-semibold text-gray-400 mb-1 uppercase">知识点</h4>
+                           <h4 className="text-xs font-semibold text-gray-400 dark:text-gray-500 dark:text-gray-400 mb-1 uppercase">知识点</h4>
                            <ul className="space-y-1">
                                {selectedSession.summary.knowledgePoints.map((point, i) => (
-                                   <li key={i} className="flex gap-2 items-start text-sm text-gray-300">
+                                   <li key={i} className="flex gap-2 items-start text-sm text-gray-600 dark:text-gray-300">
                                        <Lightbulb size={14} className="text-emerald-500 mt-0.5 flex-shrink-0" />
                                        <span>{point}</span>
                                    </li>
