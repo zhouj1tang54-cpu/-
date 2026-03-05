@@ -3,7 +3,6 @@ const fs = require('fs');
 const files = [
   'components/LiveTutor.tsx',
   'components/Transcript.tsx',
-  'components/DiagramBoard.tsx',
   'components/AudioVisualizer.tsx'
 ];
 

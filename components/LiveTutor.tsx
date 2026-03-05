@@ -1,15 +1,17 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { GoogleGenAI, LiveServerMessage, Modality, Type } from '@google/genai';
-import { Video, Mic, MicOff, Play, Square, AlertCircle, Volume2, Sparkles, Eye, Settings, VolumeX, RefreshCw, Camera, FlipHorizontal, Lightbulb, Key, X, MessageCircleQuestion, ArrowRight, ScanEye, Target, UserRoundPen, Check, ChevronRight, Gauge, Save, AudioLines, Wifi, WifiOff, FileText, Loader2, BookOpen, Sun, Moon } from 'lucide-react';
-import { ConnectionState, ChatMessage, SavedSession, UserProfile, SessionSummary } from '../types';
+import { Video, Mic, MicOff, Play, Square, AlertCircle, Volume2, Sparkles, Eye, Settings, VolumeX, RefreshCw, Camera, FlipHorizontal, Lightbulb, Key, X, MessageCircleQuestion, ArrowRight, ScanEye, Target, UserRoundPen, Check, ChevronRight, Gauge, Save, AudioLines, Wifi, WifiOff, FileText, Loader2, BookOpen, Sun, Moon, Database, Upload, Trash2 } from 'lucide-react';
+import { ConnectionState, ChatMessage, SavedSession, UserProfile, SessionSummary, ExamRecord } from '../types';
 import { createPcmBlob, decode, decodeAudioData, blobToBase64 } from '../utils/audioUtils';
 import AudioVisualizer from './AudioVisualizer';
 import Transcript from './Transcript';
-import DiagramBoard, { DiagramData } from './DiagramBoard';
+
 import * as pdfjsLib from 'pdfjs-dist';
+// @ts-ignore
+import pdfWorker from 'pdfjs-dist/build/pdf.worker.mjs?url';
 
 // Set worker source for PDF.js
-pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
 // Extend Navigator interface for Network Information API (experimental)
 interface NetworkInformation extends EventTarget {
@@ -32,52 +34,7 @@ const VOICE_OPTIONS = [
   { id: 'Puck', name: '幽默伙伴 (Puck)', desc: '轻松、略带调皮的男性声音', gender: 'Male' },
 ];
 
-// Tool Declaration for Diagramming
-const drawDiagramTool = {
-  functionDeclarations: [
-    {
-      name: "draw_diagram",
-      description: "Draw a simple, clear 2D diagram to visualize a concept. Use standard SVG coordinates (viewBox '0 0 800 600'). Keep it simple and uncluttered.",
-      parameters: {
-        type: Type.OBJECT,
-        properties: {
-          title: { type: Type.STRING, description: "Title of the diagram" },
-          description: { type: Type.STRING, description: "Short description" },
-          viewBox: { type: Type.STRING, description: "SVG viewBox, MUST be '0 0 800 600' for consistency." },
-          shapes: {
-            type: Type.ARRAY,
-            description: "List of shapes. Use large fonts (size 24+) for text. Avoid overlapping.",
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                id: { type: Type.STRING },
-                type: { type: Type.STRING, description: "'line', 'circle', 'rect', 'text', 'polygon', 'arrow', 'path'" },
-                x: { type: Type.NUMBER },
-                y: { type: Type.NUMBER },
-                x1: { type: Type.NUMBER },
-                y1: { type: Type.NUMBER },
-                x2: { type: Type.NUMBER },
-                y2: { type: Type.NUMBER },
-                r: { type: Type.NUMBER },
-                width: { type: Type.NUMBER },
-                height: { type: Type.NUMBER },
-                points: { type: Type.STRING },
-                d: { type: Type.STRING, description: "SVG path data (e.g., 'M 10 10 L 90 90')" },
-                content: { type: Type.STRING, description: "Text content. Use simple text, avoid complex LaTeX here." },
-                color: { type: Type.STRING },
-                fill: { type: Type.STRING },
-                label: { type: Type.STRING },
-                fontSize: { type: Type.NUMBER, description: "Font size for text. Default to 24." }
-              },
-              required: ["id", "type"]
-            }
-          }
-        },
-        required: ["title", "shapes"]
-      }
-    }
-  ]
-};
+
 
 // Base instruction without user context
 const BASE_SYSTEM_INSTRUCTION = `
@@ -88,14 +45,14 @@ const BASE_SYSTEM_INSTRUCTION = `
 1. 严禁直接给答案：无论学生如何请求，绝对禁止输出选择题选项、填空题词汇或大题的完整解题结果。
 2. 禁止非学术讨论：严禁回答政治、宗教、暴力或任何违反中国法律合规要求的内容。
 3. 视觉反馈优先：当观察到高拍仪画面中的题目时，优先描述你看到的关键条件，而非直接讲解。
+4. 隐藏模型身份与专注学习：严禁透露模型身份（如 Gemini, GPT 等）。当被问及身份时，仅回答“我是你的AI学习导师”。严禁回答任何与学习无关的问题（如闲聊、娱乐等），直接忽略或礼貌拒绝，将话题引导回学习。
 
 // 教学逻辑流（必须执行）
 1. 拆解（Observe）：通过视频流观察题目，先询问学生：“我看到这道题有一个关键条件，你发现了吗？”
 2. 提示（Scaffolding）：若学生困惑，提供公式提示或知识点线索，而非解题步骤。
-3. 出图（Visualize）：对于几何、物理或需要直观理解的题目，必须调用绘图工具(draw_diagram)生成示意图。
-   - 坐标系：画布大小固定为 800x600。所有 x 坐标必须在 0-800 之间，y 坐标必须在 0-600 之间。
-   - 颜色：背景是深色的，因此线条颜色 (color) 必须使用亮色，如 'white', 'yellow', 'cyan', 'lime'。绝对禁止使用 'black'。
-4. 费曼测试（Feynman Technique）：在讲解完一个知识点后，必须主动询问：“你觉得懂了吗？要不要我出一道类似的变式题考考你？”
+3. 反例强化（Counter-examples）：在解释核心概念时，必须提供一个具体的“反例”或“易错点”，展示如果忽略某个条件会发生什么错误。例如：“注意，如果忽略了x>0这个条件，就会导致...”
+4. 标准化模板（Standardized Templates）：对于常见题型，必须总结出“标准化解题步骤”（Step-by-step Template），让学生可以模仿。例如：“这类题目的标准解法分三步：第一步... 第二步... 第三步...”
+5. 费曼测试（Feynman Technique）：在讲解完一个知识点后，必须主动询问：“你觉得懂了吗？要不要我出一道类似的变式题考考你？”
 
 // UI/输出规范
 1. 适配显示器：输出文字需分段明确，使用大号 Markdown 标题，确保在 3 米外的电视前清晰可见。
@@ -141,13 +98,19 @@ const LiveTutor: React.FC = () => {
   });
   const [showProfileModal, setShowProfileModal] = useState(false);
 
+  // Exam Database State
+  const [examDatabase, setExamDatabase] = useState<ExamRecord[]>([]);
+  const [showExamModal, setShowExamModal] = useState(false);
+  const [isUploadingExam, setIsUploadingExam] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   // Insight & Summary State
   const [insightData, setInsightData] = useState<{ knowledge: string | null; eye: string | null }>({ knowledge: null, eye: null });
   const [activePopup, setActivePopup] = useState<{ type: 'knowledge' | 'eye'; content: string } | null>(null);
   const [sessionSummary, setSessionSummary] = useState<SessionSummary | null>(null);
   const [showSummaryModal, setShowSummaryModal] = useState(false);
   const [isGeneratingSummary, setIsGeneratingSummary] = useState(false);
-  const [diagramData, setDiagramData] = useState<DiagramData | null>(null);
+
   
   const [showBlurWarning, setShowBlurWarning] = useState(false);
   const [scannerActive, setScannerActive] = useState(false);
@@ -236,7 +199,7 @@ const LiveTutor: React.FC = () => {
     return () => connection.removeEventListener('change', updateQuality);
   }, [isAutoQuality]);
 
-  // Load Profile on Mount
+  // Load Profile and Exam DB on Mount
   useEffect(() => {
       try {
           const savedProfile = localStorage.getItem('user_profile');
@@ -247,8 +210,13 @@ const LiveTutor: React.FC = () => {
                   voiceName: parsed.voiceName || 'Kore'
               });
           }
+          
+          const savedExams = localStorage.getItem('exam_database');
+          if (savedExams) {
+              setExamDatabase(JSON.parse(savedExams));
+          }
       } catch (e) {
-          console.error("Failed to load profile", e);
+          console.error("Failed to load profile or exams", e);
       }
   }, []);
 
@@ -256,6 +224,12 @@ const LiveTutor: React.FC = () => {
   const saveProfile = (newProfile: UserProfile) => {
       setUserProfile(newProfile);
       localStorage.setItem('user_profile', JSON.stringify(newProfile));
+  };
+
+  // Save Exam Database Helper
+  const saveExamDatabase = (newDb: ExamRecord[]) => {
+      setExamDatabase(newDb);
+      localStorage.setItem('exam_database', JSON.stringify(newDb));
   };
 
   // Parse Insights (Knowledge, Eye), Blur Warnings, and Gestures from messages
@@ -559,7 +533,7 @@ const LiveTutor: React.FC = () => {
       setShowSummaryModal(false);
       setShowBlurWarning(false);
       setScannerActive(false);
-      setDiagramData(null);
+
       currentSessionIdRef.current = null;
 
       // 1. Setup Camera
@@ -662,6 +636,15 @@ const LiveTutor: React.FC = () => {
           console.error("Failed to load history for context", e);
       }
 
+      // Inject Exam Database Context
+      if (examDatabase.length > 0) {
+          currentSystemInstruction += `\n\n14. **Student's Past Exams Database**: The student has uploaded the following past exams. If you recognize a question from the video stream that matches these exams, YOU MUST tell the student when they took this exam (the date) and what exam it is. \n`;
+          // Limit to top 3 exams to prevent token limit issues
+          examDatabase.slice(0, 3).forEach(exam => {
+              currentSystemInstruction += `- Exam Name: ${exam.name}, Date: ${exam.date}, Content Snippet: ${exam.content.substring(0, 300)}...\n`;
+          });
+      }
+
       // 5. Connect to Gemini Live
       const sessionPromise = ai.live.connect({
         model: MODEL_NAME,
@@ -670,7 +653,7 @@ const LiveTutor: React.FC = () => {
           systemInstruction: currentSystemInstruction,
           inputAudioTranscription: {},
           outputAudioTranscription: {},
-          tools: [drawDiagramTool], // Enable the tool
+          tools: [], // Enable the tool
           speechConfig: { 
             voiceConfig: { 
                 prebuiltVoiceConfig: { 
@@ -721,25 +704,7 @@ const LiveTutor: React.FC = () => {
                 const functionCalls = msg.toolCall.functionCalls;
                 if (functionCalls) {
                     const responses = functionCalls.map(call => {
-                        if (call.name === 'draw_diagram') {
-                            try {
-                                const args = call.args as unknown as DiagramData;
-                                console.log("Diagram Tool Called:", args);
-                                setDiagramData(args);
-                                return {
-                                    id: call.id,
-                                    name: call.name,
-                                    response: { result: "Diagram displayed successfully." }
-                                };
-                            } catch (e) {
-                                console.error("Error processing diagram tool:", e);
-                                return {
-                                    id: call.id,
-                                    name: call.name,
-                                    response: { error: "Failed to render diagram." }
-                                };
-                            }
-                        }
+
                         return {
                             id: call.id,
                             name: call.name,
@@ -828,6 +793,59 @@ const LiveTutor: React.FC = () => {
         console.error("Failed to send text message:", err);
     }
   }, [updateTranscript]);
+
+  const handleUploadExamToDatabase = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    if (file.size > 10 * 1024 * 1024) {
+        alert("文件大小不能超过 10MB");
+        return;
+    }
+
+    setIsUploadingExam(true);
+    try {
+        const isPdf = file.type === 'application/pdf' || file.name.endsWith('.pdf');
+        let extractedText = '';
+
+        if (isPdf) {
+            const arrayBuffer = await file.arrayBuffer();
+            const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+            
+            for (let i = 1; i <= pdf.numPages; i++) {
+                const page = await pdf.getPage(i);
+                const textContent = await page.getTextContent();
+                const pageText = textContent.items.map((item: any) => item.str).join(' ');
+                extractedText += `Page ${i}:\n${pageText}\n\n`;
+            }
+        } else if (file.type.startsWith('text/') || file.name.endsWith('.txt')) {
+            extractedText = await file.text();
+        } else {
+            alert("目前仅支持上传 PDF 或文本文件作为题库。");
+            setIsUploadingExam(false);
+            return;
+        }
+
+        const newRecord: ExamRecord = {
+            id: Date.now().toString(),
+            name: file.name.replace(/\.[^/.]+$/, ""), // Remove extension
+            date: new Date().toISOString().split('T')[0], // Default to today
+            content: extractedText,
+            timestamp: Date.now()
+        };
+
+        saveExamDatabase([newRecord, ...examDatabase]);
+        
+    } catch (error) {
+        console.error("Error uploading exam:", error);
+        alert("解析文件失败，请重试。");
+    } finally {
+        setIsUploadingExam(false);
+        if (fileInputRef.current) {
+            fileInputRef.current.value = '';
+        }
+    }
+  };
 
   const handleSendFile = useCallback(async (file: File) => {
     if (!sessionPromiseRef.current) return;
@@ -1370,7 +1388,7 @@ const LiveTutor: React.FC = () => {
                                 <UserRoundPen size={20} className="text-indigo-400" />
                                 个人资料设置
                             </h3>
-                            <button onClick={() => setShowProfileModal(false)} className="p-1 hover:bg-white/10 rounded-full text-gray-400 dark:text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:text-white transition-colors">
+                            <button onClick={() => setShowProfileModal(false)} className="p-1 hover:bg-white/10 rounded-full text-gray-400 dark:text-gray-500 hover:text-gray-900 dark:text-white transition-colors">
                                 <X size={20} />
                             </button>
                         </div>
@@ -1472,6 +1490,83 @@ const LiveTutor: React.FC = () => {
                 </div>
             )}
 
+            {/* Exam Database Modal */}
+            {showExamModal && (
+                <div className="absolute inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
+                    <div className="bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 w-full max-w-2xl rounded-2xl shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200 max-h-[90vh] flex flex-col">
+                        <div className="p-4 border-b border-gray-300 dark:border-gray-700/50 flex justify-between items-center bg-gray-100 dark:bg-gray-800/50 flex-shrink-0">
+                            <h3 className="font-bold text-lg text-gray-900 dark:text-white flex items-center gap-2">
+                                <Database size={20} className="text-indigo-400" />
+                                专属题库管理
+                            </h3>
+                            <button onClick={() => setShowExamModal(false)} className="p-1 hover:bg-white/10 rounded-full text-gray-400 dark:text-gray-500 hover:text-gray-900 dark:text-white transition-colors">
+                                <X size={20} />
+                            </button>
+                        </div>
+                        
+                        <div className="p-6 space-y-6 overflow-y-auto flex-grow">
+                            <div className="flex justify-between items-center">
+                                <div>
+                                    <h4 className="text-gray-900 dark:text-white font-medium">已上传试卷 ({examDatabase.length})</h4>
+                                    <p className="text-sm text-gray-500">上传历史试卷，AI 导师将在讲解时自动识别并关联。</p>
+                                </div>
+                                
+                                <div>
+                                    <input 
+                                        type="file" 
+                                        accept=".pdf,.txt" 
+                                        ref={fileInputRef}
+                                        onChange={handleUploadExamToDatabase}
+                                        className="hidden" 
+                                    />
+                                    <button 
+                                        onClick={() => fileInputRef.current?.click()}
+                                        disabled={isUploadingExam}
+                                        className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-medium transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                                    >
+                                        {isUploadingExam ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
+                                        上传新试卷
+                                    </button>
+                                </div>
+                            </div>
+
+                            {examDatabase.length === 0 ? (
+                                <div className="text-center py-12 border-2 border-dashed border-gray-300 dark:border-gray-700 rounded-xl">
+                                    <Database size={48} className="mx-auto text-gray-400 dark:text-gray-600 mb-4" />
+                                    <p className="text-gray-500 dark:text-gray-400">暂无试卷数据</p>
+                                    <p className="text-sm text-gray-400 dark:text-gray-500 mt-2">点击上方按钮上传 PDF 或文本格式的试卷</p>
+                                </div>
+                            ) : (
+                                <div className="space-y-3">
+                                    {examDatabase.map(exam => (
+                                        <div key={exam.id} className="p-4 bg-gray-50 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 rounded-xl flex justify-between items-center group">
+                                            <div className="flex items-start gap-3">
+                                                <FileText className="text-indigo-400 mt-1" size={20} />
+                                                <div>
+                                                    <h5 className="font-medium text-gray-900 dark:text-white">{exam.name}</h5>
+                                                    <div className="flex items-center gap-3 text-xs text-gray-500 mt-1">
+                                                        <span>上传于: {new Date(exam.timestamp).toLocaleDateString()}</span>
+                                                        <span>•</span>
+                                                        <span>内容长度: {exam.content.length} 字符</span>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <button 
+                                                onClick={() => saveExamDatabase(examDatabase.filter(e => e.id !== exam.id))}
+                                                className="p-2 text-gray-400 hover:text-red-400 hover:bg-red-400/10 rounded-lg transition-colors opacity-0 group-hover:opacity-100"
+                                                title="删除记录"
+                                            >
+                                                <Trash2 size={18} />
+                                            </button>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {/* Connection Active Overlays */}
             {connectionState === ConnectionState.CONNECTED && (
                 <>
@@ -1480,11 +1575,7 @@ const LiveTutor: React.FC = () => {
                          <div className="scan-line" />
                     </div>
 
-                    {/* Diagram Board */}
-                    <DiagramBoard 
-                        data={diagramData} 
-                        onClose={() => setDiagramData(null)} 
-                    />
+
 
                     {/* Status Indicator (Bot) */}
                     <div className="absolute bottom-32 left-1/2 transform -translate-x-1/2 flex flex-col items-center gap-2 z-20 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -1582,13 +1673,23 @@ const LiveTutor: React.FC = () => {
                             </div>
                         </div>
 
-                        <button 
-                            onClick={startSession}
-                            className="px-16 py-6 bg-white text-black hover:bg-gray-100 rounded-full font-bold text-2xl transition-all shadow-[0_0_30px_rgba(255,255,255,0.3)] hover:shadow-[0_0_50px_rgba(255,255,255,0.6)] hover:scale-105 active:scale-95 flex items-center gap-4 group"
-                        >
-                            <Play size={28} fill="currentColor" className="group-hover:translate-x-1 transition-transform" />
-                            立即开始上课
-                        </button>
+                        <div className="flex gap-4 mb-10">
+                            <button 
+                                onClick={startSession}
+                                className="px-12 py-5 bg-white text-black hover:bg-gray-100 rounded-full font-bold text-xl transition-all shadow-[0_0_30px_rgba(255,255,255,0.3)] hover:shadow-[0_0_50px_rgba(255,255,255,0.6)] hover:scale-105 active:scale-95 flex items-center gap-3 group"
+                            >
+                                <Play size={24} fill="currentColor" className="group-hover:translate-x-1 transition-transform" />
+                                立即开始上课
+                            </button>
+
+                            <button
+                                onClick={() => setShowExamModal(true)}
+                                className="px-8 py-5 bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-100 border border-indigo-500/30 rounded-full font-bold text-xl transition-all hover:scale-105 active:scale-95 flex items-center gap-3"
+                            >
+                                <Database size={24} />
+                                专属题库 ({examDatabase.length})
+                            </button>
+                        </div>
                     </div>
                  </div>
             )}
@@ -1642,6 +1743,14 @@ const LiveTutor: React.FC = () => {
 
                         <div className="flex items-center gap-4">
                             <button 
+                                onClick={() => setShowProfileModal(true)}
+                                className="p-4 rounded-full text-gray-900 dark:text-white bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:bg-gray-700 hover:scale-110 active:scale-95 transition-all"
+                                title="修改个人资料"
+                            >
+                                <UserRoundPen size={24} />
+                            </button>
+
+                            <button 
                                 onClick={() => saveSessionToHistory(true)}
                                 disabled={messages.length === 0}
                                 className={`p-4 rounded-full text-gray-900 dark:text-white transition-all relative group ${
@@ -1676,6 +1785,8 @@ const LiveTutor: React.FC = () => {
             </div>
         )}
       </div>
+
+
 
       {/* Sidebar: Transcript */}
       {connectionState !== ConnectionState.DISCONNECTED && (

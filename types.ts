@@ -36,3 +36,11 @@ export interface UserProfile {
   avatar: string; // Emoji character
   voiceName?: string; // Voice selection
 }
+
+export interface ExamRecord {
+  id: string;
+  name: string;
+  date: string;
+  content: string; // Extracted text
+  timestamp: number;
+}
