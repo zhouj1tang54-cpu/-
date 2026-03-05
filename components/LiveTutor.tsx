@@ -54,6 +54,12 @@ const BASE_SYSTEM_INSTRUCTION = `
 4. 标准化模板（Standardized Templates）：对于常见题型，必须总结出“标准化解题步骤”（Step-by-step Template），让学生可以模仿。例如：“这类题目的标准解法分三步：第一步... 第二步... 第三步...”
 5. 费曼测试（Feynman Technique）：在讲解完一个知识点后，必须主动询问：“你觉得懂了吗？要不要我出一道类似的变式题考考你？”
 
+// 教学节奏 (Teaching Pace)
+系统会监控学生的沉默时间，并发送特定的系统提示。请根据提示调整你的回应：
+- [SYSTEM: Student silent for 5s]: 给出轻微提示 (Gentle nudge)。例如：“还在吗？有什么想法吗？”或“需要我重复一遍吗？”
+- [SYSTEM: Student silent for 10s]: 给出第二层提示 (Stronger hint)。针对当前问题提供更具体的线索，或者将问题拆解得更简单。
+- [SYSTEM: Student silent for 30s]: 提供关键步骤 (Key step)。学生可能卡住了，直接提供当前步骤的关键思路或公式，帮助他们继续。
+
 // UI/输出规范
 1. 适配显示器：输出文字需分段明确，使用大号 Markdown 标题，确保在 3 米外的电视前清晰可见。
 2. 情感反馈：使用鼓励性语言（如“太棒了”、“很有创意的想法”），但避免使用复杂的渐变色或容易导致 4K 电视光晕的视觉描述。
@@ -132,6 +138,73 @@ const LiveTutor: React.FC = () => {
 
   const [isBotSpeaking, setIsBotSpeaking] = useState(false);
   const [inputAnalyser, setInputAnalyser] = useState<AnalyserNode | null>(null);
+
+  // Teaching Pace State
+  const silenceTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const lastInteractionTimeRef = useRef<number>(Date.now());
+  const silenceLevelRef = useRef<number>(0); // 0: None, 1: 5s, 2: 10s, 3: 30s
+
+  // Silence Detection Logic
+  useEffect(() => {
+    if (connectionState !== ConnectionState.CONNECTED || isBotSpeaking) {
+        if (silenceTimerRef.current) {
+            clearInterval(silenceTimerRef.current);
+            silenceTimerRef.current = null;
+        }
+        return;
+    }
+
+    // Reset timer when bot stops speaking
+    lastInteractionTimeRef.current = Date.now();
+    silenceLevelRef.current = 0;
+
+    silenceTimerRef.current = setInterval(() => {
+        const now = Date.now();
+        const elapsed = now - lastInteractionTimeRef.current;
+
+        if (elapsed > 30000 && silenceLevelRef.current < 3) {
+            // 30s: Key step
+            silenceLevelRef.current = 3;
+            handleSendMessage("[SYSTEM: Student has been silent for 30 seconds. They seem stuck. Please provide a KEY STEP or formula to help them proceed. Do not give the full answer.]", undefined, true);
+        } else if (elapsed > 10000 && silenceLevelRef.current < 2) {
+            // 10s: Second layer hint
+            silenceLevelRef.current = 2;
+            handleSendMessage("[SYSTEM: Student has been silent for 10 seconds. Please provide a STRONGER HINT or guide them specifically.]", undefined, true);
+        } else if (elapsed > 5000 && silenceLevelRef.current < 1) {
+            // 5s: Gentle nudge
+            silenceLevelRef.current = 1;
+            handleSendMessage("[SYSTEM: Student has been silent for 5 seconds. Please give a GENTLE NUDGE or check if they are following.]", undefined, true);
+        }
+    }, 1000);
+
+    return () => {
+        if (silenceTimerRef.current) {
+            clearInterval(silenceTimerRef.current);
+            silenceTimerRef.current = null;
+        }
+    };
+  }, [connectionState, isBotSpeaking]); // Re-run when connection or speaking state changes
+
+  // Reset silence timer on user input (audio)
+  useEffect(() => {
+      if (!inputAnalyser) return;
+      
+      const checkAudio = () => {
+          const dataArray = new Uint8Array(inputAnalyser.frequencyBinCount);
+          inputAnalyser.getByteFrequencyData(dataArray);
+          
+          // Simple VAD: Check if average volume is above threshold
+          const avg = dataArray.reduce((a, b) => a + b) / dataArray.length;
+          if (avg > 10) { // Threshold
+              lastInteractionTimeRef.current = Date.now();
+              silenceLevelRef.current = 0; // Reset level so we can trigger again
+          }
+          requestAnimationFrame(checkAudio);
+      };
+      
+      const handle = requestAnimationFrame(checkAudio);
+      return () => cancelAnimationFrame(handle);
+  }, [inputAnalyser]);
 
   // --- Refs ---
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -743,11 +816,19 @@ const LiveTutor: React.FC = () => {
           onclose: () => {
             console.log('Connection Closed');
             setConnectionState(ConnectionState.DISCONNECTED);
+            if (silenceTimerRef.current) {
+                clearInterval(silenceTimerRef.current);
+                silenceTimerRef.current = null;
+            }
           },
           onerror: (err) => {
             console.error('Gemini Error:', err);
             setError(err instanceof Error ? err.message : "连接发生错误，请重试。");
             setConnectionState(ConnectionState.ERROR);
+            if (silenceTimerRef.current) {
+                clearInterval(silenceTimerRef.current);
+                silenceTimerRef.current = null;
+            }
           }
         }
       });
@@ -769,9 +850,19 @@ const LiveTutor: React.FC = () => {
     }
   };
 
-  const handleSendMessage = useCallback(async (text: string, displayOverride?: string) => {
-    if (!sessionPromiseRef.current) return;
-    updateTranscript('user', displayOverride || text, true);
+  const handleSendMessage = useCallback(async (text: string, displayOverride?: string, isSystemMessage: boolean = false) => {
+    if (!sessionPromiseRef.current || connectionState !== ConnectionState.CONNECTED) {
+        console.warn("Attempted to send message while disconnected:", text);
+        return;
+    }
+    
+    if (!isSystemMessage) {
+        updateTranscript('user', displayOverride || text, true);
+        // Reset silence timer on manual message
+        lastInteractionTimeRef.current = Date.now();
+        silenceLevelRef.current = 0;
+    }
+    
     try {
         const session = await sessionPromiseRef.current;
         const s = session as any;
@@ -791,8 +882,12 @@ const LiveTutor: React.FC = () => {
         }
     } catch (err) {
         console.error("Failed to send text message:", err);
+        // If system message fails, don't show error to user, just log it
+        if (!isSystemMessage) {
+             // Optional: notify user or retry
+        }
     }
-  }, [updateTranscript]);
+  }, [updateTranscript, connectionState]);
 
   const handleUploadExamToDatabase = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
