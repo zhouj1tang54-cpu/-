@@ -118,7 +118,105 @@ const LiveTutor: React.FC = () => {
   const [isGeneratingSummary, setIsGeneratingSummary] = useState(false);
 
   
+  // Diagram State
+  const [diagramSvg, setDiagramSvg] = useState<string | null>(null);
+  const [isGeneratingDiagram, setIsGeneratingDiagram] = useState(false);
+
+  const handleGenerateDiagram = async (questionContent: string) => {
+      setIsGeneratingDiagram(true);
+      try {
+          const ai = new GoogleGenAI({ apiKey: process.env.API_KEY! });
+          const response = await ai.models.generateContent({
+              model: "gemini-3-flash-preview",
+              contents: questionContent,
+              config: {
+                  systemInstruction: `你是一个“教学示意图生成引擎”。
+
+你的职责是：
+根据学生的题目内容，判断是否需要生成一个教学示意图帮助理解。
+
+工作流程：
+
+第一步：判断题目类型
+如果题目属于以下类型，则需要生成示意图：
+- 几何题
+- 应用题
+- 物理题
+- 路程问题
+- 比例关系
+- 空间结构
+- 逻辑关系
+
+如果题目不需要图示，则返回：
+
+{
+ "needDiagram": false
+}
+
+第二步：如果需要图示，则生成SVG示意图。
+
+返回格式必须为：
+
+{
+ "needDiagram": true,
+ "diagramType": "geometry | physics | relation | numberline | flow",
+ "svg": "<svg代码>"
+}
+
+SVG绘图规则：
+
+1. SVG尺寸固定
+width="600"
+height="400"
+
+2. 背景白色
+
+3. 图形必须简单清晰
+
+4. 只使用基础图形：
+- line
+- circle
+- rect
+- text
+- arrow
+
+5. 必须标注关键点或变量
+
+6. 不要复杂颜色
+只使用 black
+
+7. 图形必须适合初三学生理解
+
+8. SVG必须是完整标签，例如：
+
+<svg width="600" height="400" xmlns="http://www.w3.org/2000/svg">
+  <line x1="100" y1="300" x2="500" y2="300" stroke="black" stroke-width="2"/>
+</svg>
+
+重要规则：
+
+- 只允许返回JSON
+- 不允许解释
+- 不允许输出Markdown
+- 不允许添加多余文字`,
+                  responseMimeType: "application/json",
+              }
+          });
+          
+          const responseText = response.text.replace(/```json/g, '').replace(/```/g, '').trim();
+          const data = JSON.parse(responseText);
+          if (data.needDiagram && data.svg) {
+              setDiagramSvg(data.svg);
+          }
+      } catch (e) {
+          console.error("Failed to generate diagram", e);
+      } finally {
+          setIsGeneratingDiagram(false);
+      }
+  };
+
   const [showBlurWarning, setShowBlurWarning] = useState(false);
+  const [mediaWarning, setMediaWarning] = useState<string | null>(null);
   const [scannerActive, setScannerActive] = useState(false);
   const [showSaveConfirm, setShowSaveConfirm] = useState(false);
 
@@ -561,31 +659,62 @@ const LiveTutor: React.FC = () => {
     // Don't clear summary state immediately so user can see the modal
   }, [saveSessionToHistory]);
 
+  const [isVisualContextActive, setIsVisualContextActive] = useState(false);
+  const visualContextCooldownRef = useRef<number>(0);
+
   // --- Helper: Video Streaming ---
+  // Modified to be on-demand only
+  const triggerVisualContext = useCallback(async (sessionPromise: Promise<any>) => {
+      const now = Date.now();
+      if (now - visualContextCooldownRef.current < 5000) {
+          console.log("Visual context cooldown active");
+          return;
+      }
+      
+      setIsVisualContextActive(true);
+      visualContextCooldownRef.current = now;
+
+      // Capture 3 frames over 1.5 seconds to ensure we get a clear shot
+      let framesCaptured = 0;
+      const captureInterval = setInterval(() => {
+          if (!videoRef.current || !canvasRef.current) {
+              clearInterval(captureInterval);
+              setIsVisualContextActive(false);
+              return;
+          }
+          
+          const video = videoRef.current;
+          const canvas = canvasRef.current;
+          const ctx = canvas.getContext('2d');
+          
+          if (ctx && video.readyState >= 2) {
+              canvas.width = video.videoWidth;
+              canvas.height = video.videoHeight;
+              ctx.drawImage(video, 0, 0);
+              
+              canvas.toBlob(async (blob) => {
+                  if (blob) {
+                      const base64 = await blobToBase64(blob);
+                      sessionPromise.then(session => {
+                          session.sendRealtimeInput({ media: { mimeType: 'image/jpeg', data: base64 } });
+                      });
+                  }
+              }, 'image/jpeg', 0.8);
+          }
+          
+          framesCaptured++;
+          if (framesCaptured >= 3) {
+              clearInterval(captureInterval);
+              setTimeout(() => setIsVisualContextActive(false), 1000); // Keep UI active slightly longer
+          }
+      }, 500);
+  }, []);
+
   const startVideoStreaming = useCallback((sessionPromise: Promise<any>) => {
-    if (frameIntervalRef.current) clearInterval(frameIntervalRef.current);
-    frameIntervalRef.current = window.setInterval(() => {
-        if (!videoRef.current || !canvasRef.current) return;
-        const video = videoRef.current;
-        const canvas = canvasRef.current;
-        const ctx = canvas.getContext('2d');
-        if (!ctx || video.readyState < 2) return;
-        
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        ctx.drawImage(video, 0, 0);
-        
-        // Dynamic Quality Used Here
-        canvas.toBlob(async (blob) => {
-            if (blob) {
-                const base64 = await blobToBase64(blob);
-                sessionPromise.then(session => {
-                    session.sendRealtimeInput({ media: { mimeType: 'image/jpeg', data: base64 } });
-                });
-            }
-        }, 'image/jpeg', videoQuality); // Use state for quality
-    }, 1000 / videoFrameRate); // Use state for FPS
-  }, [videoFrameRate, videoQuality]);
+    // Legacy function kept for interface compatibility, but logic moved to on-demand
+    // We don't start an interval here anymore.
+    console.log("Video streaming initialized in on-demand mode.");
+  }, []);
 
   // Update video streaming interval if frame rate/quality changes while connected
   useEffect(() => {
@@ -605,6 +734,7 @@ const LiveTutor: React.FC = () => {
       setSessionSummary(null); // Clear previous summary
       setShowSummaryModal(false);
       setShowBlurWarning(false);
+      setMediaWarning(null);
       setScannerActive(false);
 
       currentSessionIdRef.current = null;
@@ -616,7 +746,7 @@ const LiveTutor: React.FC = () => {
       try {
           // First try with specific device and ideal resolution
           const constraints: MediaStreamConstraints = {
-              video: selectedCameraId ? { deviceId: { ideal: selectedCameraId }, width: { ideal: 1280 }, height: { ideal: 720 } } : { width: { ideal: 1280 }, height: { ideal: 720 } },
+              video: selectedCameraId ? { deviceId: { exact: selectedCameraId }, width: { ideal: 1280 }, height: { ideal: 720 } } : { width: { ideal: 1280 }, height: { ideal: 720 } },
               audio: true
           };
           stream = await navigator.mediaDevices.getUserMedia(constraints);
@@ -624,39 +754,52 @@ const LiveTutor: React.FC = () => {
           console.warn("Failed to get media with specific constraints, trying default camera", err);
           finalError = err instanceof Error ? err : new Error(String(err));
           
+          // Check for OverconstrainedError specifically
+          if (err instanceof OverconstrainedError) {
+             console.warn("OverconstrainedError detected, relaxing constraints.");
+          }
+
           try {
               // Try without any resolution constraints, just request video and audio
               stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
           } catch (fallbackErr) {
-              console.warn("Failed to get default camera and audio together, trying just video", fallbackErr);
-              finalError = fallbackErr instanceof Error ? fallbackErr : new Error(String(fallbackErr));
+              console.warn("Failed to get default camera and audio together", fallbackErr);
               
               try {
-                  // Last resort 1: just try to get ANY video stream
-                  stream = await navigator.mediaDevices.getUserMedia({ video: true });
-              } catch (videoOnlyErr) {
-                  console.error("Failed to get even just video", videoOnlyErr);
-                  finalError = videoOnlyErr instanceof Error ? videoOnlyErr : new Error(String(videoOnlyErr));
+                  // Fallback 1: Try audio only first (more likely to succeed if camera is blocked/used)
+                  console.warn("Trying audio only mode");
+                  stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+              } catch (audioOnlyErr) {
+                  console.error("Failed to get audio only", audioOnlyErr);
                   
                   try {
-                      // Last resort 2: just try to get ANY audio stream (voice only mode)
-                      console.warn("Trying audio only mode as video failed completely");
-                      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                  } catch (audioOnlyErr) {
-                      console.error("Failed to get audio only", audioOnlyErr);
-                      finalError = audioOnlyErr instanceof Error ? audioOnlyErr : new Error(String(audioOnlyErr));
-                      // If everything fails, throw the most relevant error (usually the video one)
-                      throw finalError; 
+                      // Fallback 2: Try video only (rare case where mic is blocked but camera works)
+                      console.warn("Trying video only mode");
+                      stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                  } catch (videoOnlyErr) {
+                      console.error("Failed to get video only", videoOnlyErr);
+                      console.warn("All media access failed. Proceeding in text-only mode.");
                   }
               }
           }
       }
       
       if (!stream) {
-          throw new Error("Failed to initialize any media stream.");
+          console.warn("No media stream available. App will run in text-only mode.");
+          setMediaWarning("无法访问摄像头或麦克风，已进入纯文本/语音模式。您可以通过文字或上传图片与 AI 交流。");
+      } else {
+          // Check what tracks we actually got
+          const hasVideo = stream.getVideoTracks().length > 0;
+          const hasAudio = stream.getAudioTracks().length > 0;
+          
+          if (!hasVideo && hasAudio) {
+              setMediaWarning("无法访问摄像头，已进入纯语音模式。您可以通过语音或上传图片与 AI 交流。");
+          } else if (!hasAudio && hasVideo) {
+              setMediaWarning("无法访问麦克风，您只能通过文字与 AI 交流，但 AI 可以看到您的画面。");
+          }
       }
 
-      if (videoRef.current && stream.getVideoTracks().length > 0) {
+      if (stream && videoRef.current && stream.getVideoTracks().length > 0) {
         videoRef.current.srcObject = stream;
         await videoRef.current.play();
       }
@@ -678,6 +821,8 @@ const LiveTutor: React.FC = () => {
 
       // 4. Construct System Instruction
       let currentSystemInstruction = BASE_SYSTEM_INSTRUCTION;
+      currentSystemInstruction += `\n\n15. **On-Demand Vision**: I will only send you images when I explicitly ask for help or say "look at this". When you receive an image, it means I am asking about what is currently visible. If I haven't sent an image recently, assume I am just talking to you.`;
+      
       if (userProfile.name) {
           currentSystemInstruction += `\n11. **Student Profile**: The student's name is "${userProfile.name}". Use their name occasionally to be friendly.`;
       }
@@ -726,7 +871,24 @@ const LiveTutor: React.FC = () => {
           systemInstruction: currentSystemInstruction,
           inputAudioTranscription: {},
           outputAudioTranscription: {},
-          tools: [], // Enable the tool
+          tools: [{
+              functionDeclarations: [
+                  {
+                      name: "generateDiagram",
+                      description: "当学生遇到几何题、物理题、应用题等需要画图辅助理解的题目时，调用此函数生成教学示意图。必须传入题目的完整描述。",
+                      parameters: {
+                          type: Type.OBJECT,
+                          properties: {
+                              questionContent: {
+                                  type: Type.STRING,
+                                  description: "题目的完整内容或核心条件描述"
+                              }
+                          },
+                          required: ["questionContent"]
+                      }
+                  }
+              ]
+          }], // Enable the tool
           speechConfig: { 
             voiceConfig: { 
                 prebuiltVoiceConfig: { 
@@ -740,7 +902,10 @@ const LiveTutor: React.FC = () => {
             console.log('Gemini Live Connection Opened');
             setConnectionState(ConnectionState.CONNECTED);
             
-            if (!inputContextRef.current) return;
+            if (!inputContextRef.current || !stream || stream.getAudioTracks().length === 0) {
+                console.log("No audio stream available for input.");
+                return;
+            }
             const source = inputContextRef.current.createMediaStreamSource(stream);
             
             const analyser = inputContextRef.current.createAnalyser();
@@ -759,12 +924,24 @@ const LiveTutor: React.FC = () => {
             source.connect(processor);
             processor.connect(inputContextRef.current.destination);
 
-            startVideoStreaming(sessionPromise);
+            // Only start video streaming if we have a video track
+            if (stream && stream.getVideoTracks().length > 0) {
+                startVideoStreaming(sessionPromise);
+            }
           },
           onmessage: async (msg: LiveServerMessage) => {
             if (msg.serverContent?.inputTranscription) {
               const text = msg.serverContent.inputTranscription.text;
-              if (text) updateTranscript('user', text, false);
+              if (text) {
+                  updateTranscript('user', text, false);
+                  
+                  // Keyword detection for visual context
+                  const keywords = ['帮我', '看看', '解决', '不懂', '难点', '解释', '为什么', '错哪', '题', 'question', 'help', 'look', 'see', 'what', 'wrong'];
+                  if (keywords.some(k => text.toLowerCase().includes(k))) {
+                      console.log("Visual context trigger detected:", text);
+                      triggerVisualContext(sessionPromise);
+                  }
+              }
             }
             if (msg.serverContent?.outputTranscription) {
               const text = msg.serverContent.outputTranscription.text;
@@ -777,7 +954,15 @@ const LiveTutor: React.FC = () => {
                 const functionCalls = msg.toolCall.functionCalls;
                 if (functionCalls) {
                     const responses = functionCalls.map(call => {
-
+                        if (call.name === 'generateDiagram') {
+                            const args = call.args as { questionContent: string };
+                            handleGenerateDiagram(args.questionContent);
+                            return {
+                                id: call.id,
+                                name: call.name,
+                                response: { result: "Diagram generation started." }
+                            };
+                        }
                         return {
                             id: call.id,
                             name: call.name,
@@ -835,16 +1020,9 @@ const LiveTutor: React.FC = () => {
       sessionPromiseRef.current = sessionPromise;
 
     } catch (err) {
-      console.error(err);
-      if (err instanceof Error && (err.name === 'NotAllowedError' || err.message.includes('Permission denied'))) {
-          setError("无法访问摄像头或麦克风，请在浏览器设置中允许权限。");
-      } else if (err instanceof Error && (err.name === 'NotFoundError' || err.message.includes('Requested device not found'))) {
-          setError("未检测到摄像头或麦克风。请确保设备已连接。");
-      } else if (err instanceof Error && (err.name === 'NotReadableError' || err.message.includes('Could not start video source'))) {
-          setError("无法启动摄像头或麦克风。请检查：1. 是否有其他程序（如Zoom/微信）正在使用它们。2. 尝试重启浏览器或电脑。");
-      } else {
-          setError(err instanceof Error ? err.message : "无法启动会话");
-      }
+      console.error("Session start error:", err);
+      // We only get here if Gemini connection fails, since media errors are now caught
+      setError(err instanceof Error ? err.message : "无法启动会话");
       setConnectionState(ConnectionState.ERROR);
       stopSession();
     }
@@ -1118,6 +1296,19 @@ const LiveTutor: React.FC = () => {
             {/* Hidden canvas for frame extraction */}
             <canvas ref={canvasRef} className="hidden" />
             
+            {/* Media Warning Overlay */}
+            {mediaWarning && connectionState === ConnectionState.CONNECTED && (
+                <div className="absolute inset-0 flex items-center justify-center z-10 bg-gray-900/80 backdrop-blur-sm">
+                    <div className="bg-gray-800 border border-yellow-500/30 p-6 rounded-2xl max-w-md text-center shadow-2xl">
+                        <div className="w-16 h-16 bg-yellow-500/20 rounded-full flex items-center justify-center mx-auto mb-4">
+                            <Camera className="text-yellow-500" size={32} />
+                        </div>
+                        <h3 className="text-xl font-bold text-white mb-2">无摄像头画面</h3>
+                        <p className="text-gray-300 text-sm leading-relaxed">{mediaWarning}</p>
+                    </div>
+                </div>
+            )}
+
             {/* Scanner / Focus Overlay */}
             {scannerActive && (
                 <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-20">
@@ -1241,6 +1432,39 @@ const LiveTutor: React.FC = () => {
                 </div>
             )}
 
+            {/* Diagram Modal */}
+            {(diagramSvg || isGeneratingDiagram) && (
+                <div className="absolute inset-0 z-40 flex items-center justify-center p-4 pointer-events-none">
+                    <div className="bg-white border border-gray-200 w-full max-w-2xl rounded-2xl shadow-2xl overflow-hidden animate-in zoom-in-95 duration-300 flex flex-col pointer-events-auto">
+                        <div className="p-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
+                            <h3 className="font-bold text-lg text-gray-900 flex items-center gap-2">
+                                <Sparkles size={20} className="text-indigo-500" />
+                                教学示意图
+                            </h3>
+                            <button 
+                                onClick={() => setDiagramSvg(null)} 
+                                className="p-1 hover:bg-gray-200 rounded-full text-gray-400 hover:text-gray-900 transition-colors"
+                            >
+                                <X size={20} />
+                            </button>
+                        </div>
+                        <div className="p-6 flex items-center justify-center bg-white min-h-[400px]">
+                            {isGeneratingDiagram ? (
+                                <div className="flex flex-col items-center gap-4">
+                                    <Loader2 size={40} className="animate-spin text-indigo-500" />
+                                    <p className="text-gray-500 animate-pulse">正在生成示意图...</p>
+                                </div>
+                            ) : diagramSvg ? (
+                                <div 
+                                    className="w-full h-full flex items-center justify-center"
+                                    dangerouslySetInnerHTML={{ __html: diagramSvg }} 
+                                />
+                            ) : null}
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {/* Session Summary Modal */}
             {showSummaryModal && (
                 <div className="absolute inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-md animate-in fade-in duration-300">
@@ -1291,11 +1515,25 @@ const LiveTutor: React.FC = () => {
                                         </h4>
                                         <ul className="space-y-2">
                                             {sessionSummary.knowledgePoints.map((point, idx) => (
-                                                <li key={idx} className="flex gap-3 items-start bg-gray-100 dark:bg-gray-800/30 p-3 rounded-lg border border-gray-300 dark:border-gray-700/50 hover:border-emerald-500/30 transition-colors">
-                                                    <span className="flex-shrink-0 w-5 h-5 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center text-xs font-bold mt-0.5">
-                                                        {idx + 1}
-                                                    </span>
-                                                    <span className="text-gray-600 dark:text-gray-300 text-sm">{point}</span>
+                                                <li key={idx} className="flex flex-col gap-2 bg-gray-100 dark:bg-gray-800/30 p-3 rounded-lg border border-gray-300 dark:border-gray-700/50 hover:border-emerald-500/30 transition-colors">
+                                                    <div className="flex gap-3 items-start">
+                                                        <span className="flex-shrink-0 w-5 h-5 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center text-xs font-bold mt-0.5">
+                                                            {idx + 1}
+                                                        </span>
+                                                        <span className="text-gray-600 dark:text-gray-300 text-sm flex-1">{point}</span>
+                                                    </div>
+                                                    <div className="pl-8">
+                                                        <button 
+                                                            onClick={() => {
+                                                                handleAskExplain('knowledge', point);
+                                                                setShowSummaryModal(false);
+                                                            }}
+                                                            className="text-xs flex items-center gap-1 text-indigo-500 hover:text-indigo-400 font-medium transition-colors py-1 px-2 rounded hover:bg-indigo-500/10"
+                                                        >
+                                                            <Sparkles size={12} />
+                                                            AI 详细讲解
+                                                        </button>
+                                                    </div>
                                                 </li>
                                             ))}
                                         </ul>
@@ -1672,15 +1910,25 @@ const LiveTutor: React.FC = () => {
 
 
 
-                    {/* Status Indicator (Bot) */}
-                    <div className="absolute bottom-32 left-1/2 transform -translate-x-1/2 flex flex-col items-center gap-2 z-20 animate-in fade-in slide-in-from-bottom-4 duration-500">
-                        <div className={`
-                            relative flex items-center gap-3 px-6 py-3 rounded-full border backdrop-blur-md transition-all duration-500 shadow-xl
-                            ${isBotSpeaking 
-                                ? 'bg-emerald-500 border-emerald-400 text-gray-900 dark:text-white ripple-effect scale-110' 
-                                : 'bg-white dark:bg-gray-900/80 border-indigo-500/30 text-indigo-100'
-                            }
-                        `}>
+                    {/* Status Indicator & Visual Trigger */}
+                    <div className="absolute bottom-24 left-1/2 transform -translate-x-1/2 flex flex-col items-center gap-2 z-30 animate-in fade-in slide-in-from-bottom-4 duration-500">
+                        <button
+                            onClick={() => {
+                                if (!isBotSpeaking && !isVisualContextActive && sessionPromiseRef.current) {
+                                    triggerVisualContext(sessionPromiseRef.current);
+                                }
+                            }}
+                            disabled={isBotSpeaking || isVisualContextActive}
+                            className={`
+                                relative flex items-center gap-3 px-6 py-3 rounded-full border backdrop-blur-md transition-all duration-500 shadow-xl
+                                ${isBotSpeaking 
+                                    ? 'bg-emerald-500 border-emerald-400 text-gray-900 dark:text-white ripple-effect scale-110 cursor-default' 
+                                    : isVisualContextActive
+                                        ? 'bg-indigo-600 border-indigo-500 text-white scale-105 ring-4 ring-indigo-500/30 cursor-default'
+                                        : 'bg-white dark:bg-gray-900/90 border-indigo-500/30 text-indigo-600 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-gray-800 hover:scale-105 active:scale-95 cursor-pointer'
+                                }
+                            `}
+                        >
                             {isBotSpeaking ? (
                                 <>
                                     <Sparkles size={18} className="animate-spin-slow text-yellow-300" />
@@ -1689,22 +1937,31 @@ const LiveTutor: React.FC = () => {
                                         <AudioVisualizer isActive={true} color="white" width={60} height={16} />
                                     </div>
                                 </>
+                            ) : isVisualContextActive ? (
+                                <>
+                                    <ScanEye size={18} className="animate-pulse" />
+                                    <span className="font-semibold tracking-wide">正在观察题目...</span>
+                                    {/* Breathing light effect */}
+                                    <div className="absolute inset-0 rounded-full bg-indigo-500/20 animate-[pulse_2s_ease-in-out_infinite] -z-10"></div>
+                                </>
                             ) : (
                                 <>
                                     <div className="relative">
-                                        <Eye size={18} className="text-indigo-300" />
+                                        <Eye size={18} />
                                         <span className="absolute -top-1 -right-1 flex h-2 w-2">
                                           <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
                                           <span className="relative inline-flex rounded-full h-2 w-2 bg-indigo-500"></span>
                                         </span>
                                     </div>
-                                    <span className="text-sm font-medium animate-pulse">正在观察与分析...</span>
-                                    {/* Breathing light effect */}
-                                    <div className="absolute inset-0 rounded-full bg-indigo-500/10 animate-[pulse_2s_ease-in-out_infinite] -z-10"></div>
-                                    <div className="absolute inset-0 rounded-full bg-gradient-to-r from-transparent via-indigo-500/20 to-transparent animate-[shimmer_2s_linear_infinite] -z-10" style={{backgroundSize: '200% 100%'}}></div>
+                                    <span className="font-bold tracking-wide">让 AI 看题</span>
                                 </>
                             )}
-                        </div>
+                        </button>
+                        {!isBotSpeaking && !isVisualContextActive && (
+                            <p className="text-white/80 text-xs text-center mt-1 bg-black/40 px-3 py-1.5 rounded-full backdrop-blur-sm border border-white/10">
+                                说 "帮我看看" 或点击按钮上传画面
+                            </p>
+                        )}
                     </div>
                 </>
             )}
