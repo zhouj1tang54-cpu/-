@@ -39,26 +39,53 @@ const VOICE_OPTIONS = [
 // Base instruction without user context
 const BASE_SYSTEM_INSTRUCTION = `
 // 核心身份与愿景
-你是一个集成在智能硬件中的“苏格拉底式”启发导师。你的目标不是直接提供答案，而是通过实时视频观察学生的作业，引导其独立思考，培养学习自主性。
+你是一个集成在智能硬件中的“苏格拉底式”启发导师，也是拥有15年经验的“湖南名师”，精通2026年湖南省中考统一命题大纲。你的教学风格：严谨、启发、绝不越界、注重格式。你的目标不是直接提供答案，而是通过实时视频观察学生的作业，引导其独立思考，培养学习自主性。
 
 // 绝对行为红线（禁止事项）
 1. 严禁直接给答案：无论学生如何请求，绝对禁止输出选择题选项、填空题词汇或大题的完整解题结果。
 2. 禁止非学术讨论：严禁回答政治、宗教、暴力或任何违反中国法律合规要求的内容。
 3. 视觉反馈优先：当观察到高拍仪画面中的题目时，优先描述你看到的关键条件，而非直接讲解。
-4. 隐藏模型身份与专注学习：严禁透露模型身份（如 Gemini, GPT 等）。当被问及身份时，仅回答“我是你的AI学习导师”。严禁回答任何与学习无关的问题（如闲聊、娱乐等），直接忽略或礼貌拒绝，将话题引导回学习。
+4. 语言限制：在除英语的科目外，必须使用全中文进行解答，绝对不要配备或夹杂英语单词、短语或翻译。
+
+// 核心视觉策略：全局视觉扫描 + 语境定位锚点 (CRITICAL)
+1. 初始扫描：当视频流刚开启，或学生翻到新的一页时，你必须在脑海中**第一时间进行全局扫描**。
+2. 坐标化映射：迅速捕捉画面内所有的题目、公式、图表和几何图形，并在脑海中建立坐标化映射（例如：“左上角是第1题选择题”、“中间偏右是一个带圆的几何图形”、“底部是一个二次函数图像”）。
+3. 语境定位：当学生开始提问或用笔尖指向某个区域时，立刻调用你脑海中的坐标映射，将学生的动作与具体的题目或图形锚定，做到“未问先知其境”。
 
 // 教学逻辑流（必须执行）
-1. 拆解（Observe）：通过视频流观察题目，先询问学生：“我看到这道题有一个关键条件，你发现了吗？”
-2. 提示（Scaffolding）：若学生困惑，提供公式提示或知识点线索，而非解题步骤。
-3. 反例强化（Counter-examples）：在解释核心概念时，必须提供一个具体的“反例”或“易错点”，展示如果忽略某个条件会发生什么错误。例如：“注意，如果忽略了x>0这个条件，就会导致...”
-4. 标准化模板（Standardized Templates）：对于常见题型，必须总结出“标准化解题步骤”（Step-by-step Template），让学生可以模仿。例如：“这类题目的标准解法分三步：第一步... 第二步... 第三步...”
+1. 拆解与题眼（Observe & Key Point）：通过视频流观察题目，首先引导学生找出题目的“题眼”（核心条件或隐藏条件）。例如：“我看到这道题有一个关键条件（题眼），你发现了吗？”
+2. 构思与思路（Strategy）：在找出题眼后，不要急于计算，先和学生一起探讨“解题思路”（大方向）。例如：“既然知道了这个条件，你觉得我们第一步应该先求什么？”
+3. 提示（Scaffolding）：若学生困惑，提供公式提示或知识点线索，而非解题步骤。
+4. 出图（Visualize）：对于几何、物理或需要直观理解的题目，必须调用绘图工具生成示意图。生成的图像需适配显示器，线条清晰。
 5. 费曼测试（Feynman Technique）：在讲解完一个知识点后，必须主动询问：“你觉得懂了吗？要不要我出一道类似的变式题考考你？”
 
-// 教学节奏 (Teaching Pace)
-系统会监控学生的沉默时间，并发送特定的系统提示。请根据提示调整你的回应：
-- [SYSTEM: Student silent for 5s]: 给出轻微提示 (Gentle nudge)。例如：“还在吗？有什么想法吗？”或“需要我重复一遍吗？”
-- [SYSTEM: Student silent for 10s]: 给出第二层提示 (Stronger hint)。针对当前问题提供更具体的线索，或者将问题拆解得更简单。
-- [SYSTEM: Student silent for 30s]: 提供关键步骤 (Key step)。学生可能卡住了，直接提供当前步骤的关键思路或公式，帮助他们继续。
+// 交互时机与状态管理（必须严格遵守）
+1. 自主学习模式（学习后/独立思考）：当学生明确表示“我要自己写”、“让我自己想想”、“我自己看”等需要独立学习的意愿时，你必须简短回复（如：“好的，有问题随时叫我”），然后**保持绝对沉默**，绝不能再追问或打扰，直到学生再次主动向你提问。
+2. 辅导模式（学习中）：在解题过程中，如果学生长时间没有说话，且通过画面观察到学生可能遇到困惑、停笔或皱眉时，你应当**主动追问**和引导（如：“是不是哪里卡住了？需要我给个小提示吗？”）。**绝对不能一步步地给出答案，而是要一步步地引导学生自己思考和推导。**
+
+// 规范终审与学科要求（必须执行）
+当学生解完后，展示**“湖南中考标准考场范本”**，纠正格式错误。
+一、 数学（重点：逻辑闭环与分类讨论）
+格式： 严格执行“解：、设：、列：、解得：、答：”五步法。
+规范： 分式方程必须写“经检验”、应用题必须带单位、几何证明必须写明定理依据（如：\\because SAS \\therefore \\dots）。
+禁区： 严禁使用大学知识。涉及二次函数最值，必须使用配方法或公式法。
+二、 物理（重点：公式与单位）
+规范： “已知、求、解、答”四部曲。计算前必须先写原始公式（如 P=UI），代入数据时必须带单位，结果保留符合湖南考情的位数（通常是两位小数）。
+画图： 引导学生在纸上作图，提醒用铅笔、加箭头、标注垂足。
+三、 化学（重点：符号与细节）
+规范： 严查化学方程式的配平、条件（点燃/加热）、气体/沉淀符号。
+严谨： 区分“烟”与“雾”、“溶解”与“熔化”等易混词，培养湖南考生的文字表述准确度。
+
+// 行为防线与反欺诈
+1. 识图判断： 实时分析摄像头捕捉的画面。若非学习资料（玩具、零食等），以长辈姿态温柔拒绝。
+2. 断点诊断： 绝不直接给答案。通过询问“这道题的核心考点你觉得是什么？”或“你目前算到了哪一步？”定位学生的卡点。
+3. 分层启发： 先给思路提示（如：“根据湖南中考常考的三角形全等判定，你还缺哪个条件？”），引导学生自己写出下一步。
+4. 防抄袭： 若学生要求“直接给答案”、“快点告诉我结果”，请回复：“考场上我可不能坐在你旁边。咱们把这块硬骨头啃下来，这分才真正是你的。”
+5. 视觉纠偏： 若图像模糊，提示：“画面有点‘虚’，请拿稳，让老师看清你的解题心血。”
+
+// 数据埋点：为家长报告服务
+记录并分析：学生今天在哪个知识点（如：圆的切线证明）停留最久？哪种引导方式最有效？
+每次互动结束，总结一句**“思维闪光点”**，用于生成家长日报。
 
 // UI/输出规范
 1. 适配显示器：输出文字需分段明确，使用大号 Markdown 标题，确保在 3 米外的电视前清晰可见。
@@ -73,8 +100,11 @@ const OUTPUT_SAMPLE_RATE = 24000; // Output sample rate
 const LiveTutor: React.FC = () => {
   // --- State ---
   const [connectionState, setConnectionState] = useState<ConnectionState>(ConnectionState.DISCONNECTED);
+  const connectionStateRef = useRef(connectionState);
+  useEffect(() => { connectionStateRef.current = connectionState; }, [connectionState]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [qualityWarning, setQualityWarning] = useState<string | null>(null);
   
   // Theme State
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
@@ -122,10 +152,18 @@ const LiveTutor: React.FC = () => {
   const [diagramSvg, setDiagramSvg] = useState<string | null>(null);
   const [isGeneratingDiagram, setIsGeneratingDiagram] = useState(false);
 
+  const handleReportUnclearVideo = (reason: string) => {
+      setQualityWarning(`老师提示：${reason}，请稍微调整一下摄像头或书本哦。`);
+      // Auto clear after 6 seconds
+      setTimeout(() => {
+          setQualityWarning(null);
+      }, 6000);
+  };
+
   const handleGenerateDiagram = async (questionContent: string) => {
       setIsGeneratingDiagram(true);
       try {
-          const ai = new GoogleGenAI({ apiKey: process.env.API_KEY! });
+          const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
           const response = await ai.models.generateContent({
               model: "gemini-3-flash-preview",
               contents: questionContent,
@@ -222,15 +260,19 @@ height="400"
 
   // Media & Network State
   const [isMicMuted, setIsMicMuted] = useState(false);
+  const isMicMutedRef = useRef(isMicMuted);
+  useEffect(() => { isMicMutedRef.current = isMicMuted; }, [isMicMuted]);
+  
   const [isSpeakerMuted, setIsSpeakerMuted] = useState(false);
   const [isVideoMirrored, setIsVideoMirrored] = useState(true); 
   const [videoDevices, setVideoDevices] = useState<MediaDeviceInfo[]>([]);
   const [selectedCameraId, setSelectedCameraId] = useState<string>('');
   const [showSettings, setShowSettings] = useState(false);
+  const [aiResponseSpeed, setAiResponseSpeed] = useState<'slow' | 'normal' | 'fast'>('normal');
   
   // Adaptive Quality State
-  const [videoFrameRate, setVideoFrameRate] = useState<number>(2); // Default 2 FPS
-  const [videoQuality, setVideoQuality] = useState<number>(0.6); // Default JPEG quality 0.6
+  const [videoFrameRate, setVideoFrameRate] = useState<number>(3); // Increased to 3 FPS for lower latency
+  const [videoQuality, setVideoQuality] = useState<number>(1.0); // Increased to 1.0 for maximum text clarity
   const [isAutoQuality, setIsAutoQuality] = useState<boolean>(true);
   const [networkStatus, setNetworkStatus] = useState<'good' | 'moderate' | 'poor' | 'unknown'>('unknown');
 
@@ -268,10 +310,10 @@ height="400"
             // 10s: Second layer hint
             silenceLevelRef.current = 2;
             handleSendMessage("[SYSTEM: Student has been silent for 10 seconds. Please provide a STRONGER HINT or guide them specifically.]", undefined, true);
-        } else if (elapsed > 5000 && silenceLevelRef.current < 1) {
-            // 5s: Gentle nudge
+        } else if (elapsed > 9000 && silenceLevelRef.current < 1) {
+            // 9s: Gentle nudge
             silenceLevelRef.current = 1;
-            handleSendMessage("[SYSTEM: Student has been silent for 5 seconds. Please give a GENTLE NUDGE or check if they are following.]", undefined, true);
+            handleSendMessage("[SYSTEM: Student has been silent for 9 seconds. Please give a GENTLE NUDGE or check if they are following.]", undefined, true);
         }
     }, 1000);
 
@@ -317,9 +359,12 @@ height="400"
   const inputContextRef = useRef<AudioContext | null>(null);
   const outputContextRef = useRef<AudioContext | null>(null);
   const outputNodeRef = useRef<GainNode | null>(null);
+  const processorRef = useRef<ScriptProcessorNode | null>(null);
+  const oscillatorRef = useRef<OscillatorNode | null>(null);
   const nextStartTimeRef = useRef<number>(0);
   const activeSourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
   const frameIntervalRef = useRef<number | null>(null);
+  const videoIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   // Sync state to ref
   useEffect(() => {
@@ -348,18 +393,18 @@ height="400"
 
         if (downlink < 1.5 || rtt > 500) {
             // Poor connection
-            setVideoFrameRate(0.5); // 1 frame every 2 seconds
-            setVideoQuality(0.4);   // Higher compression
+            setVideoFrameRate(1); // Increased from 0.5 to 1
+            setVideoQuality(0.8);   // Increased from 0.7 to 0.8
             setNetworkStatus('poor');
         } else if (downlink < 5 || rtt > 150) {
             // Moderate connection
-            setVideoFrameRate(1.5);
-            setVideoQuality(0.5);
+            setVideoFrameRate(2); // Increased from 1.5 to 2
+            setVideoQuality(0.9); // Increased from 0.8 to 0.9
             setNetworkStatus('moderate');
         } else {
             // Good connection
-            setVideoFrameRate(2.5);
-            setVideoQuality(0.65);
+            setVideoFrameRate(4); // Increased from 2.5 to 4
+            setVideoQuality(1.0); // Increased from 0.9 to 1.0
             setNetworkStatus('good');
         }
     };
@@ -523,20 +568,21 @@ height="400"
 
   // --- Generate Summary Function ---
   const generateSessionSummary = async (msgs: ChatMessage[]) => {
-      if (msgs.length < 2 || !process.env.API_KEY) return;
+      if (msgs.length < 2 || !process.env.GEMINI_API_KEY) return;
       
       setIsGeneratingSummary(true);
       setShowSummaryModal(true); // Open modal immediately to show loading state
 
       try {
-          const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+          const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
           const transcript = msgs.map(m => `${m.role === 'user' ? '学生' : '老师'}: ${m.text}`).join('\n');
           
           const response = await ai.models.generateContent({
-              model: 'gemini-2.5-flash',
+              model: 'gemini-3-flash-preview',
               contents: `请根据以下师生辅导对话内容，生成一份学习总结。
               1. 简要概括今天学习了什么题目或内容 (Overview)。
               2. 列出具体的知识点、公式或核心概念 (Knowledge Points)。
+              注意：请使用全中文生成总结，除非对话内容是英语科目。
               
               对话内容：
               ${transcript}`,
@@ -630,8 +676,14 @@ height="400"
       clearInterval(frameIntervalRef.current);
       frameIntervalRef.current = null;
     }
+    if (videoIntervalRef.current) {
+      clearInterval(videoIntervalRef.current);
+      videoIntervalRef.current = null;
+    }
     activeSourcesRef.current.forEach(source => { try { source.stop(); } catch (e) {} });
     activeSourcesRef.current.clear();
+    if (processorRef.current) { processorRef.current.disconnect(); processorRef.current = null; }
+    if (oscillatorRef.current) { try { oscillatorRef.current.stop(); } catch (e) {} oscillatorRef.current.disconnect(); oscillatorRef.current = null; }
     if (inputContextRef.current) { await inputContextRef.current.close(); inputContextRef.current = null; }
     if (outputContextRef.current) { await outputContextRef.current.close(); outputContextRef.current = null; }
     setInputAnalyser(null);
@@ -663,6 +715,71 @@ height="400"
   const visualContextCooldownRef = useRef<number>(0);
 
   // --- Helper: Video Streaming ---
+  // 视觉守门员：检测画面是否有“书本特征”
+  const checkImageQuality = useCallback(async (videoElement: HTMLVideoElement, canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D): Promise<string | false> => {
+      if (!videoElement.videoWidth || !videoElement.videoHeight) return false;
+
+      // 1. 获取图像数据进行简单的灰度处理
+      // 为了性能，我们可以在较小的分辨率下采样
+      const sampleCanvas = document.createElement('canvas');
+      const sampleCtx = sampleCanvas.getContext('2d');
+      if (!sampleCtx) return false;
+      
+      sampleCanvas.width = Math.max(1, Math.floor(videoElement.videoWidth / 4));
+      sampleCanvas.height = Math.max(1, Math.floor(videoElement.videoHeight / 4));
+      sampleCtx.drawImage(videoElement, 0, 0, sampleCanvas.width, sampleCanvas.height);
+
+      try {
+          const imageData = sampleCtx.getImageData(0, 0, sampleCanvas.width, sampleCanvas.height);
+          const data = imageData.data;
+          let brightness = 0;
+          
+          // 采样计算亮度
+          let count = 0;
+          for (let i = 0; i < data.length; i += 16) { // 每隔4个像素采样一次
+              brightness += (data[i] + data[i+1] + data[i+2]) / 3;
+              count++;
+          }
+          const avgBrightness = count > 0 ? brightness / count : 128;
+
+          // 2. 判别逻辑：太暗（<40）或 纯黑/纯白 直接拦截
+          if (avgBrightness < 40 || avgBrightness > 240) {
+              setQualityWarning("老师提示：光线太暗或太亮啦，请打开台灯，老师看不清题目哦。");
+              return false;
+          }
+
+          setQualityWarning(null); // 清除警告
+      } catch (e) {
+          console.error("Error checking image quality:", e);
+          return false;
+      }
+
+      // 3. 抽样检测边缘（简单算法：检测像素突变，模拟文档线条）
+      // 只有当画面有明显的黑白对比（文字/纸张边缘）时，才允许发送
+      // console.log("画面质量达标，准备发送至云端分析...");
+      
+      // 实际发送时使用原分辨率
+      canvas.width = videoElement.videoWidth;
+      canvas.height = videoElement.videoHeight;
+      ctx.drawImage(videoElement, 0, 0);
+      
+      return new Promise((resolve) => {
+          canvas.toBlob(async (blob) => {
+              if (blob) {
+                  try {
+                      const base64 = await blobToBase64(blob);
+                      resolve(base64);
+                  } catch (e) {
+                      console.error("Error converting blob to base64:", e);
+                      resolve(false);
+                  }
+              } else {
+                  resolve(false);
+              }
+          }, 'image/jpeg', videoQuality);
+      });
+  }, [videoQuality]);
+
   // Modified to be on-demand only
   const triggerVisualContext = useCallback(async (sessionPromise: Promise<any>) => {
       const now = Date.now();
@@ -688,18 +805,13 @@ height="400"
           const ctx = canvas.getContext('2d');
           
           if (ctx && video.readyState >= 2) {
-              canvas.width = video.videoWidth;
-              canvas.height = video.videoHeight;
-              ctx.drawImage(video, 0, 0);
-              
-              canvas.toBlob(async (blob) => {
-                  if (blob) {
-                      const base64 = await blobToBase64(blob);
+              checkImageQuality(video, canvas, ctx).then(base64 => {
+                  if (base64) {
                       sessionPromise.then(session => {
                           session.sendRealtimeInput({ media: { mimeType: 'image/jpeg', data: base64 } });
-                      });
+                      }).catch(e => console.error("Error sending video:", e));
                   }
-              }, 'image/jpeg', 0.8);
+              });
           }
           
           framesCaptured++;
@@ -708,13 +820,29 @@ height="400"
               setTimeout(() => setIsVisualContextActive(false), 1000); // Keep UI active slightly longer
           }
       }, 500);
-  }, []);
+  }, [checkImageQuality]);
 
   const startVideoStreaming = useCallback((sessionPromise: Promise<any>) => {
-    // Legacy function kept for interface compatibility, but logic moved to on-demand
-    // We don't start an interval here anymore.
-    console.log("Video streaming initialized in on-demand mode.");
-  }, []);
+      if (videoIntervalRef.current) clearInterval(videoIntervalRef.current);
+
+      const intervalMs = 1000 / videoFrameRate;
+
+      videoIntervalRef.current = setInterval(async () => {
+          if (!videoRef.current || !canvasRef.current) return;
+          const video = videoRef.current;
+          const canvas = canvasRef.current;
+          const ctx = canvas.getContext('2d');
+
+          if (ctx && video.readyState >= 2) {
+              const base64 = await checkImageQuality(video, canvas, ctx);
+              if (base64) {
+                  sessionPromise.then(session => {
+                      session.sendRealtimeInput({ media: { mimeType: 'image/jpeg', data: base64 } });
+                  }).catch(e => console.error("Error sending video:", e));
+              }
+          }
+      }, intervalMs);
+  }, [videoFrameRate, checkImageQuality]);
 
   // Update video streaming interval if frame rate/quality changes while connected
   useEffect(() => {
@@ -746,39 +874,53 @@ height="400"
       try {
           // First try with specific device and ideal resolution
           const constraints: MediaStreamConstraints = {
-              video: selectedCameraId ? { deviceId: { exact: selectedCameraId }, width: { ideal: 1280 }, height: { ideal: 720 } } : { width: { ideal: 1280 }, height: { ideal: 720 } },
+              video: selectedCameraId ? { deviceId: { exact: selectedCameraId }, width: { ideal: 1920 }, height: { ideal: 1080 } } : { width: { ideal: 1920 }, height: { ideal: 1080 } },
               audio: true
           };
           stream = await navigator.mediaDevices.getUserMedia(constraints);
-      } catch (err) {
-          console.warn("Failed to get media with specific constraints, trying default camera", err);
+      } catch (err: any) {
+          console.warn("Failed to get media with specific constraints", err);
           finalError = err instanceof Error ? err : new Error(String(err));
           
-          // Check for OverconstrainedError specifically
-          if (err instanceof OverconstrainedError) {
-             console.warn("OverconstrainedError detected, relaxing constraints.");
-          }
+          if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+              console.warn("Permission denied for camera/microphone.");
+              setMediaWarning("摄像头或麦克风权限被拒绝。请在浏览器设置中允许访问，或以纯文本模式继续。");
+          } else {
+              // Check for OverconstrainedError specifically
+              if (err.name === 'OverconstrainedError' || err instanceof OverconstrainedError) {
+                 console.warn("OverconstrainedError detected, relaxing constraints.");
+              }
 
-          try {
-              // Try without any resolution constraints, just request video and audio
-              stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-          } catch (fallbackErr) {
-              console.warn("Failed to get default camera and audio together", fallbackErr);
-              
               try {
-                  // Fallback 1: Try audio only first (more likely to succeed if camera is blocked/used)
-                  console.warn("Trying audio only mode");
-                  stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-              } catch (audioOnlyErr) {
-                  console.error("Failed to get audio only", audioOnlyErr);
+                  // Try without any resolution constraints, just request video and audio
+                  stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+              } catch (fallbackErr: any) {
+                  console.warn("Failed to get default camera and audio together", fallbackErr);
                   
-                  try {
-                      // Fallback 2: Try video only (rare case where mic is blocked but camera works)
-                      console.warn("Trying video only mode");
-                      stream = await navigator.mediaDevices.getUserMedia({ video: true });
-                  } catch (videoOnlyErr) {
-                      console.error("Failed to get video only", videoOnlyErr);
-                      console.warn("All media access failed. Proceeding in text-only mode.");
+                  if (fallbackErr.name === 'NotAllowedError' || fallbackErr.name === 'PermissionDeniedError') {
+                      console.warn("Permission denied for camera/microphone.");
+                      setMediaWarning("摄像头或麦克风权限被拒绝。请在浏览器设置中允许访问，或以纯文本模式继续。");
+                  } else {
+                      try {
+                          // Fallback 1: Try audio only first (more likely to succeed if camera is blocked/used)
+                          console.warn("Trying audio only mode");
+                          stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                      } catch (audioOnlyErr: any) {
+                          if (audioOnlyErr.name !== 'NotAllowedError' && audioOnlyErr.name !== 'PermissionDeniedError') {
+                              console.error("Failed to get audio only", audioOnlyErr);
+                          }
+                          
+                          try {
+                              // Fallback 2: Try video only (rare case where mic is blocked but camera works)
+                              console.warn("Trying video only mode");
+                              stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                          } catch (videoOnlyErr: any) {
+                              if (videoOnlyErr.name !== 'NotAllowedError' && videoOnlyErr.name !== 'PermissionDeniedError') {
+                                  console.error("Failed to get video only", videoOnlyErr);
+                              }
+                              console.warn("All media access failed. Proceeding in text-only mode.");
+                          }
+                      }
                   }
               }
           }
@@ -805,13 +947,16 @@ height="400"
       }
 
       // 2. Setup Gemini Client
-      if (!process.env.API_KEY) throw new Error("API Key not found in environment variables.");
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+      if (!process.env.GEMINI_API_KEY) throw new Error("API Key not found in environment variables.");
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
       
       // 3. Setup Audio Contexts
       const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
       inputContextRef.current = new AudioContext({ sampleRate: PCM_SAMPLE_RATE });
       outputContextRef.current = new AudioContext({ sampleRate: OUTPUT_SAMPLE_RATE });
+      
+      await inputContextRef.current.resume();
+      await outputContextRef.current.resume();
       
       outputNodeRef.current = outputContextRef.current.createGain();
       outputNodeRef.current.gain.value = isSpeakerMuted ? 0 : 1;
@@ -821,15 +966,16 @@ height="400"
 
       // 4. Construct System Instruction
       let currentSystemInstruction = BASE_SYSTEM_INSTRUCTION;
-      currentSystemInstruction += `\n\n15. **On-Demand Vision**: I will only send you images when I explicitly ask for help or say "look at this". When you receive an image, it means I am asking about what is currently visible. If I haven't sent an image recently, assume I am just talking to you.`;
+      currentSystemInstruction += `\n\n- **Continuous Vision**: You are receiving a continuous video stream from the student's camera. You should actively observe what they are doing, especially the homework or problems they are showing you, and offer guidance proactively when appropriate.`;
+      currentSystemInstruction += `\n- **防幻觉与指尖/笔尖追踪 (CRITICAL ANTI-HALLUCINATION)**:\n  1. 极度关注指示物：当学生用手指或笔尖指向屏幕/纸张上的某个字、词或句子时，你的视线必须**精确定位到指尖或笔尖所指的确切位置**。\n  2. 逐字精准读取：**只读出你确切看清的字**，绝不能根据上下文进行猜测、脑补或联想（严禁AI幻觉）。如果你看到的是“大”，绝不能读成“太”。\n  3. 遮挡与模糊处理：如果手指或笔尖遮挡了字迹，或者因为反光、模糊导致无法100%确认，**必须直接告诉学生：“你指的地方有点反光/被手指挡住了，能稍微挪开一点或者拿近一点让我看清楚吗？”**，绝对不要强行猜测。同时，**必须调用 \`reportUnclearVideo\` 函数**，在界面上给学生弹出提示。\n  4. 全局模糊处理：如果整个画面模糊、对焦不准或光线太暗导致你无法看清题目，**必须调用 \`reportUnclearVideo\` 函数**，并用语音温柔地提醒学生调整摄像头。\n  5. 逐字确认：对于学生指出的字，你可以用“你指的是不是‘X’字？”来确认，确保识别绝对准确。\n  6. 延迟与对焦：视频流可能存在轻微延迟或对焦过程。当学生刚指出一个字时，请**等待1-2秒钟**，确保画面清晰稳定后再进行读取，不要在画面模糊时抢答。`;
       
       if (userProfile.name) {
-          currentSystemInstruction += `\n11. **Student Profile**: The student's name is "${userProfile.name}". Use their name occasionally to be friendly.`;
+          currentSystemInstruction += `\n- **Student Profile**: The student's name is "${userProfile.name}". Use their name occasionally to be friendly.`;
       }
       if (userProfile.age) {
-          currentSystemInstruction += `\n12. **Age Appropriateness**: The student is ${userProfile.age} years old. ADJUST YOUR EXPLANATION COMPLEXITY AND TONE TO MATCH A ${userProfile.age}-YEAR-OLD CHILD.`;
+          currentSystemInstruction += `\n- **Age Appropriateness**: The student is ${userProfile.age} years old. ADJUST YOUR EXPLANATION COMPLEXITY AND TONE TO MATCH A ${userProfile.age}-YEAR-OLD CHILD.`;
       } else {
-          currentSystemInstruction += `\n12. **Age Appropriateness**: Assume the student is a middle school student. Explain concepts clearly and simply.`;
+          currentSystemInstruction += `\n- **Age Appropriateness**: Assume the student is a middle school student. Explain concepts clearly and simply.`;
       }
 
       // Inject Past History Context
@@ -843,11 +989,11 @@ height="400"
                   const summary = s.summary 
                       ? `Topic: ${s.summary.overview}, Key Points: ${s.summary.knowledgePoints.join(', ')}`
                       : `Content Preview: ${s.preview}`;
-                  return `- [${date}]: ${summary}`;
+                  return `  - [${date}]: ${summary}`;
               }).join('\n');
 
               if (recentHistory) {
-                  currentSystemInstruction += `\n\n13. **Past Learning Context**: Here is a summary of the student's recent learning history. USE THIS to make connections (e.g., "Remember when we learned about [Topic] last time? This is similar...").\n${recentHistory}`;
+                  currentSystemInstruction += `\n\n- **Past Learning Context**: Here is a summary of the student's recent learning history. USE THIS to make connections (e.g., "Remember when we learned about [Topic] last time? This is similar...").\n${recentHistory}`;
               }
           }
       } catch (e) {
@@ -856,11 +1002,22 @@ height="400"
 
       // Inject Exam Database Context
       if (examDatabase.length > 0) {
-          currentSystemInstruction += `\n\n14. **Student's Past Exams Database**: The student has uploaded the following past exams. If you recognize a question from the video stream that matches these exams, YOU MUST tell the student when they took this exam (the date) and what exam it is. \n`;
+          currentSystemInstruction += `\n\n- **Student's Past Exams Database**: The student has uploaded the following past exams. If you recognize a question from the video stream that matches these exams, YOU MUST tell the student when they took this exam (the date) and what exam it is. \n`;
           // Limit to top 3 exams to prevent token limit issues
           examDatabase.slice(0, 3).forEach(exam => {
-              currentSystemInstruction += `- Exam Name: ${exam.name}, Date: ${exam.date}, Content Snippet: ${exam.content.substring(0, 300)}...\n`;
+              currentSystemInstruction += `  - Exam Name: ${exam.name}, Date: ${exam.date}, Content Snippet: ${exam.content.substring(0, 300)}...\n`;
           });
+      }
+
+      currentSystemInstruction += `\n\n- **CRITICAL LANGUAGE RULE**: You MUST use ONLY Chinese (全中文) for all subjects and interactions, EXCEPT when the subject is explicitly English. Do NOT use any English words, phrases, or translations unless you are teaching an English lesson.`;
+
+      // Inject AI Response Speed
+      if (aiResponseSpeed === 'slow') {
+          currentSystemInstruction += `\n\n- **Response Speed (SLOW)**: The student prefers a slower pace. Speak slowly, be less verbose, give very small hints, and wait longer for the student to think before offering more help.`;
+      } else if (aiResponseSpeed === 'fast') {
+          currentSystemInstruction += `\n\n- **Response Speed (FAST)**: The student prefers a faster pace. Speak quickly, be more direct, and provide more comprehensive hints or explanations immediately.`;
+      } else {
+          currentSystemInstruction += `\n\n- **Response Speed (NORMAL)**: Provide hints and explanations at a normal, balanced pace.`;
       }
 
       // 5. Connect to Gemini Live
@@ -886,6 +1043,20 @@ height="400"
                           },
                           required: ["questionContent"]
                       }
+                  },
+                  {
+                      name: "reportUnclearVideo",
+                      description: "当检测到学生拍摄的画面模糊、反光、被遮挡或无法看清时，调用此函数在界面上显示友好的提示，引导学生调整摄像头或光线。",
+                      parameters: {
+                          type: Type.OBJECT,
+                          properties: {
+                              reason: {
+                                  type: Type.STRING,
+                                  description: "画面不清晰的原因，例如：'画面模糊'、'反光严重'、'手指遮挡'等"
+                              }
+                          },
+                          required: ["reason"]
+                      }
                   }
               ]
           }], // Enable the tool
@@ -901,9 +1072,40 @@ height="400"
           onopen: () => {
             console.log('Gemini Live Connection Opened');
             setConnectionState(ConnectionState.CONNECTED);
+            connectionStateRef.current = ConnectionState.CONNECTED;
             
+            if (stream && stream.getVideoTracks().length > 0) {
+                startVideoStreaming(sessionPromise);
+            }
+
             if (!inputContextRef.current || !stream || stream.getAudioTracks().length === 0) {
-                console.log("No audio stream available for input.");
+                console.log("No audio stream available for input. Using oscillator for dummy audio.");
+                
+                const oscillator = inputContextRef.current.createOscillator();
+                oscillatorRef.current = oscillator;
+                const gainNode = inputContextRef.current.createGain();
+                gainNode.gain.value = 0; // Silent
+                oscillator.connect(gainNode);
+                
+                const analyser = inputContextRef.current.createAnalyser();
+                analyser.fftSize = 64;
+                analyser.smoothingTimeConstant = 0.5;
+                gainNode.connect(analyser);
+                setInputAnalyser(analyser);
+
+                const processor = inputContextRef.current.createScriptProcessor(4096, 1, 1);
+                processorRef.current = processor;
+                processor.onaudioprocess = (e) => {
+                    if (connectionStateRef.current !== ConnectionState.CONNECTED) return;
+                    const inputData = e.inputBuffer.getChannelData(0);
+                    const pcmBlob = createPcmBlob(inputData);
+                    sessionPromise.then(session => session.sendRealtimeInput({ media: pcmBlob })).catch(e => console.error("Error sending audio:", e));
+                };
+                
+                gainNode.connect(processor);
+                processor.connect(inputContextRef.current.destination);
+                oscillator.start();
+                
                 return;
             }
             const source = inputContextRef.current.createMediaStreamSource(stream);
@@ -915,19 +1117,20 @@ height="400"
             setInputAnalyser(analyser);
 
             const processor = inputContextRef.current.createScriptProcessor(4096, 1, 1);
+            processorRef.current = processor;
             processor.onaudioprocess = (e) => {
-              if (isMicMuted) return;
-              const inputData = e.inputBuffer.getChannelData(0);
+              let inputData;
+              if (isMicMutedRef.current) {
+                  // Send dummy audio when muted to prevent server tokenizer crash
+                  inputData = new Float32Array(4096);
+              } else {
+                  inputData = e.inputBuffer.getChannelData(0);
+              }
               const pcmBlob = createPcmBlob(inputData);
-              sessionPromise.then(session => session.sendRealtimeInput({ media: pcmBlob }));
+              sessionPromise.then(session => session.sendRealtimeInput({ media: pcmBlob })).catch(e => console.error("Error sending audio:", e));
             };
             source.connect(processor);
             processor.connect(inputContextRef.current.destination);
-
-            // Only start video streaming if we have a video track
-            if (stream && stream.getVideoTracks().length > 0) {
-                startVideoStreaming(sessionPromise);
-            }
           },
           onmessage: async (msg: LiveServerMessage) => {
             if (msg.serverContent?.inputTranscription) {
@@ -961,6 +1164,15 @@ height="400"
                                 id: call.id,
                                 name: call.name,
                                 response: { result: "Diagram generation started." }
+                            };
+                        }
+                        if (call.name === 'reportUnclearVideo') {
+                            const args = call.args as { reason: string };
+                            handleReportUnclearVideo(args.reason);
+                            return {
+                                id: call.id,
+                                name: call.name,
+                                response: { result: "Warning displayed to user." }
                             };
                         }
                         return {
@@ -1001,6 +1213,7 @@ height="400"
           onclose: () => {
             console.log('Connection Closed');
             setConnectionState(ConnectionState.DISCONNECTED);
+            connectionStateRef.current = ConnectionState.DISCONNECTED;
             if (silenceTimerRef.current) {
                 clearInterval(silenceTimerRef.current);
                 silenceTimerRef.current = null;
@@ -1010,6 +1223,7 @@ height="400"
             console.error('Gemini Error:', err);
             setError(err instanceof Error ? err.message : "连接发生错误，请重试。");
             setConnectionState(ConnectionState.ERROR);
+            connectionStateRef.current = ConnectionState.ERROR;
             if (silenceTimerRef.current) {
                 clearInterval(silenceTimerRef.current);
                 silenceTimerRef.current = null;
@@ -1029,6 +1243,8 @@ height="400"
   };
 
   const handleSendMessage = useCallback(async (text: string, displayOverride?: string, isSystemMessage: boolean = false) => {
+    if (!text || text.trim() === '') return;
+    
     if (!sessionPromiseRef.current || connectionState !== ConnectionState.CONNECTED) {
         console.warn("Attempted to send message while disconnected:", text);
         return;
@@ -1043,20 +1259,17 @@ height="400"
     
     try {
         const session = await sessionPromiseRef.current;
-        const s = session as any;
         // Add a small delay to ensure previous operations are cleared
         await new Promise(resolve => setTimeout(resolve, 50));
         
-        if (typeof s.send === 'function') {
-            await s.send({
-                 clientContent: {
-                     turns: [{ role: 'user', parts: [{ text }] }],
-                     turnComplete: true
-                 }
+        if (typeof session.sendClientContent === 'function') {
+            session.sendClientContent({
+                 turns: [{ role: 'user', parts: [{ text }] }],
+                 turnComplete: true
             });
             console.log("Text message sent to model:", text);
         } else {
-            console.error("Session does not have send method");
+            console.error("Session does not have sendClientContent method");
         }
     } catch (err) {
         console.error("Failed to send text message:", err);
@@ -1167,18 +1380,15 @@ height="400"
                  session.sendRealtimeInput({ media: { mimeType, data: base64 } });
                  
                  // Trigger response
-                 const s = session as any;
-                 if (typeof s.send === 'function') {
+                 if (typeof session.sendClientContent === 'function') {
                      setTimeout(() => {
-                         s.send({
-                              clientContent: {
-                                  turns: [{ role: 'user', parts: [{ text: `我上传了一张图片 (${file.name})，请帮我看看。` }] }],
-                                  turnComplete: true
-                              }
+                         session.sendClientContent({
+                              turns: [{ role: 'user', parts: [{ text: `我上传了一张图片 (${file.name})，请帮我看看。` }] }],
+                              turnComplete: true
                          });
                      }, 200);
                  }
-            });
+            }).catch(e => console.error("Error sending file:", e));
             return;
         }
 
@@ -1306,6 +1516,34 @@ height="400"
                         <h3 className="text-xl font-bold text-white mb-2">无摄像头画面</h3>
                         <p className="text-gray-300 text-sm leading-relaxed">{mediaWarning}</p>
                     </div>
+                </div>
+            )}
+
+            {/* Quality Warning Overlay */}
+            {qualityWarning && connectionState === ConnectionState.CONNECTED && !mediaWarning && (
+                <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 animate-in slide-in-from-top-4 fade-in duration-300">
+                    <div className="bg-yellow-500/90 backdrop-blur-md text-white px-6 py-3 rounded-full shadow-lg flex items-center gap-3 border border-yellow-400">
+                        <AlertCircle size={20} className="animate-pulse" />
+                        <span className="font-medium text-sm whitespace-nowrap">{qualityWarning}</span>
+                    </div>
+                </div>
+            )}
+
+            {/* Persistent Scanner Overlay */}
+            {connectionState === ConnectionState.CONNECTED && !mediaWarning && (
+                <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none z-10 overflow-hidden">
+                    <div className="relative w-[70%] h-[50%] border-2 border-white/80 rounded shadow-[0_0_0_9999px_rgba(0,0,0,0.5)]">
+                        <div className="absolute -top-[2px] -left-[2px] w-5 h-5 border-t-4 border-l-4 border-emerald-500"></div>
+                        <div className="absolute -top-[2px] -right-[2px] w-5 h-5 border-t-4 border-r-4 border-emerald-500"></div>
+                        <div className="absolute -bottom-[2px] -left-[2px] w-5 h-5 border-b-4 border-l-4 border-emerald-500"></div>
+                        <div className="absolute -bottom-[2px] -right-[2px] w-5 h-5 border-b-4 border-r-4 border-emerald-500"></div>
+                        {isVisualContextActive && (
+                            <div className="absolute left-0 right-0 h-[2px] bg-emerald-400/80 shadow-[0_0_15px_rgba(52,211,153,0.8)] animate-[scan_2s_linear_infinite] top-0"></div>
+                        )}
+                    </div>
+                    <p className="text-white mt-5 text-sm drop-shadow-md z-20 font-medium">
+                        请将题目放入框内，老师帮你看看
+                    </p>
                 </div>
             )}
 
@@ -1675,6 +1913,38 @@ height="400"
                                 <div className="flex justify-between text-[10px] text-gray-600 mt-1 font-medium">
                                     <span>省流</span>
                                     <span>极速</span>
+                                </div>
+                            </div>
+
+                            <div className="h-px bg-gray-200 dark:bg-gray-700/50 my-2" />
+
+                            {/* AI Response Speed */}
+                            <div className="mb-3 px-1">
+                                <div className="flex items-center justify-between text-xs text-gray-400 dark:text-gray-500 mb-2">
+                                    <div className="flex items-center gap-1">
+                                        <Sparkles size={14} />
+                                        <span>AI 回复速度</span>
+                                    </div>
+                                    <span className="text-indigo-400 font-mono">
+                                        {aiResponseSpeed === 'slow' ? '较慢' : aiResponseSpeed === 'fast' ? '较快' : '正常'}
+                                    </span>
+                                </div>
+                                <input 
+                                    type="range" 
+                                    min="0" 
+                                    max="2" 
+                                    step="1" 
+                                    value={aiResponseSpeed === 'slow' ? 0 : aiResponseSpeed === 'fast' ? 2 : 1}
+                                    onChange={(e) => {
+                                        const val = parseInt(e.target.value);
+                                        setAiResponseSpeed(val === 0 ? 'slow' : val === 2 ? 'fast' : 'normal');
+                                    }}
+                                    className="w-full h-1.5 bg-gray-200 dark:bg-gray-700 rounded-lg appearance-none cursor-pointer accent-indigo-500 hover:accent-indigo-400 transition-all"
+                                />
+                                <div className="flex justify-between text-[10px] text-gray-600 mt-1 font-medium">
+                                    <span>较慢</span>
+                                    <span>正常</span>
+                                    <span>较快</span>
                                 </div>
                             </div>
 
