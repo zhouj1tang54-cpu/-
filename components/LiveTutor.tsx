@@ -3,10 +3,12 @@ import { GoogleGenAI, LiveServerMessage, Modality, Type } from '@google/genai';
 import { Video, Mic, MicOff, Play, Square, AlertCircle, Volume2, Sparkles, Eye, Settings, VolumeX, RefreshCw, Camera, FlipHorizontal, Lightbulb, Key, X, MessageCircleQuestion, ArrowRight, ScanEye, Target, UserRoundPen, Check, ChevronRight, Gauge, Save, AudioLines, Wifi, WifiOff, FileText, Loader2, BookOpen, Sun, Moon, Database, Upload, Trash2 } from 'lucide-react';
 import { ConnectionState, ChatMessage, SavedSession, UserProfile, SessionSummary, ExamRecord } from '../types';
 import { createPcmBlob, decode, decodeAudioData, blobToBase64 } from '../utils/audioUtils';
+import { classifyQuestion } from '../utils/QuestionClassifier';
 import AudioVisualizer from './AudioVisualizer';
 import Transcript from './Transcript';
 
 import * as pdfjsLib from 'pdfjs-dist';
+import Tesseract from 'tesseract.js';
 // @ts-ignore
 import pdfWorker from 'pdfjs-dist/build/pdf.worker.mjs?url';
 
@@ -151,6 +153,9 @@ const LiveTutor: React.FC = () => {
   // Diagram State
   const [diagramSvg, setDiagramSvg] = useState<string | null>(null);
   const [isGeneratingDiagram, setIsGeneratingDiagram] = useState(false);
+
+  // OCR State
+  const [isProcessingOCR, setIsProcessingOCR] = useState(false);
 
   const handleReportUnclearVideo = (reason: string) => {
       setQualityWarning(`老师提示：${reason}，请稍微调整一下摄像头或书本哦。`);
@@ -1376,6 +1381,27 @@ height="400"
             const msgText = `[用户上传了图片: ${file.name}]`;
             updateTranscript('user', msgText, true);
             
+            // Run OCR on the uploaded image
+            try {
+                const result = await Tesseract.recognize(file, 'chi_sim+eng');
+                const text = result.data.text.trim();
+                if (text) {
+                    const ocrText = `[系统：通过OCR识别到上传图片中的文字内容如下]\n${text}`;
+                    handleSendMessage(ocrText, `[系统：已识别图片文字，共 ${text.length} 字]`, true);
+                    
+                    const apiKey = process.env.GEMINI_API_KEY || import.meta.env.VITE_GEMINI_API_KEY;
+                    if (apiKey) {
+                        const classification = await classifyQuestion(text, apiKey);
+                        if (classification) {
+                            const classMsg = `[系统：题型分析完成。学科：${classification.subject}，知识点：${classification.topic}，题型：${classification.questionType}，难度：${classification.difficulty}，核心概念：${classification.keyConcepts.join(', ')}。请根据此题型特点进行针对性讲解。]`;
+                            handleSendMessage(classMsg, `[系统：已识别题型为 ${classification.subject} - ${classification.questionType}]`, true);
+                        }
+                    }
+                }
+            } catch (e) {
+                console.error("OCR Error on uploaded image:", e);
+            }
+
             sessionPromiseRef.current.then(session => {
                  session.sendRealtimeInput({ media: { mimeType, data: base64 } });
                  
@@ -1417,6 +1443,72 @@ height="400"
       handleSendMessage(prompt);
       setActivePopup(null);
   };
+
+  const lastOcrTextRef = useRef<string>('');
+  const ocrIntervalRef = useRef<NodeJS.Timeout | null>(null);
+
+  const performBackgroundOCR = async () => {
+      if (!videoRef.current || !canvasRef.current || isProcessingOCR) return;
+      const video = videoRef.current;
+      const canvas = canvasRef.current;
+      const ctx = canvas.getContext('2d');
+      if (!ctx || video.readyState < 2) return;
+
+      setIsProcessingOCR(true);
+      try {
+          // Capture current frame
+          canvas.width = video.videoWidth;
+          canvas.height = video.videoHeight;
+          ctx.drawImage(video, 0, 0);
+          
+          const dataUrl = canvas.toDataURL('image/jpeg');
+          
+          // Run OCR
+          const result = await Tesseract.recognize(dataUrl, 'chi_sim+eng');
+          
+          const text = result.data.text.trim();
+          if (text && text.length > 10) {
+              // Similarity check to avoid spamming the same text
+              if (lastOcrTextRef.current && (lastOcrTextRef.current.includes(text) || text.includes(lastOcrTextRef.current))) {
+                  return; // Too similar, skip
+              }
+              lastOcrTextRef.current = text;
+
+              const msgText = `[系统：后台持续观察，通过OCR识别到当前画面中的文字内容如下]\n${text}`;
+              const displayText = `[系统：已自动识别画面文字，共 ${text.length} 字]`;
+              handleSendMessage(msgText, displayText, true);
+              
+              const apiKey = process.env.GEMINI_API_KEY || import.meta.env.VITE_GEMINI_API_KEY;
+              if (apiKey) {
+                  const classification = await classifyQuestion(text, apiKey);
+                  if (classification) {
+                      const classMsg = `[系统：题型分析完成。学科：${classification.subject}，知识点：${classification.topic}，题型：${classification.questionType}，难度：${classification.difficulty}，核心概念：${classification.keyConcepts.join(', ')}。请根据此题型特点进行针对性讲解。]`;
+                      handleSendMessage(classMsg, `[系统：已识别题型为 ${classification.subject} - ${classification.questionType}]`, true);
+                  }
+              }
+          }
+      } catch (e) {
+          console.error("Background OCR Error:", e);
+      } finally {
+          setIsProcessingOCR(false);
+      }
+  };
+
+  useEffect(() => {
+      if (connectionState === ConnectionState.CONNECTED) {
+          // Run background OCR every 15 seconds
+          ocrIntervalRef.current = setInterval(performBackgroundOCR, 15000);
+      } else {
+          if (ocrIntervalRef.current) {
+              clearInterval(ocrIntervalRef.current);
+          }
+      }
+      return () => {
+          if (ocrIntervalRef.current) {
+              clearInterval(ocrIntervalRef.current);
+          }
+      };
+  }, [connectionState]);
 
   return (
     <div className="flex h-screen w-full bg-gray-50 dark:bg-gray-950 text-gray-900 dark:text-white overflow-hidden">
