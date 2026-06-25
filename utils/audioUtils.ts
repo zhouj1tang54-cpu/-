@@ -2,12 +2,34 @@ import { Blob } from '@google/genai';
 
 // Converts Float32Array (Web Audio API default) to Int16Array (Gemini requirement)
 // and returns a Blob compatible with the Gemini Live API input
-export function createPcmBlob(data: Float32Array): Blob {
-  const l = data.length;
+export function resample(input: Float32Array, fromRate: number, toRate: number): Float32Array {
+  if (fromRate === toRate) {
+    return input;
+  }
+  const ratio = fromRate / toRate;
+  const newLength = Math.round(input.length / ratio);
+  const result = new Float32Array(newLength);
+  for (let i = 0; i < newLength; i++) {
+    const nextOffset = i * ratio;
+    const index = Math.floor(nextOffset);
+    const interpolationFraction = nextOffset - index;
+    const currentSample = input[index];
+    const nextSample = index + 1 < input.length ? input[index + 1] : currentSample;
+    result[i] = currentSample + interpolationFraction * (nextSample - currentSample);
+  }
+  return result;
+}
+
+export function createPcmBlob(data: Float32Array, fromRate?: number): Blob {
+  let targetData = data;
+  if (fromRate && fromRate !== 16000) {
+    targetData = resample(data, fromRate, 16000);
+  }
+  const l = targetData.length;
   const int16 = new Int16Array(l);
   for (let i = 0; i < l; i++) {
     // Clamp values to [-1, 1] before scaling
-    const s = Math.max(-1, Math.min(1, data[i]));
+    const s = Math.max(-1, Math.min(1, targetData[i]));
     int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
   }
   

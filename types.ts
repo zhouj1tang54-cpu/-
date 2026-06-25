@@ -44,3 +44,11 @@ export interface ExamRecord {
   content: string; // Extracted text
   timestamp: number;
 }
+
+export interface VariantQuestion {
+  title: string;
+  question: string;
+  options?: string[];
+  correctAnswer: string;
+  explanation: string;
+}

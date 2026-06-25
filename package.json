@@ -4,28 +4,37 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
+    "dev": "tsx server.ts",
+    "build": "vite build && esbuild server.ts --bundle --platform=node --outfile=dist/server.cjs --external:express --external:vite --external:http-proxy-middleware",
+    "start": "node dist/server.cjs",
     "preview": "vite preview",
     "lint": "tsc --noEmit"
   },
   "dependencies": {
     "@google/genai": "^1.34.0",
+    "express": "^5.2.1",
+    "http-proxy-middleware": "^4.0.0",
     "katex": "^0.16.28",
     "lucide-react": "^0.562.0",
+    "motion": "^12.40.0",
     "pdfjs-dist": "^5.4.624",
     "react": "^19.2.3",
     "react-dom": "^19.2.3",
     "react-markdown": "^10.1.0",
     "rehype-katex": "^7.0.1",
     "remark-math": "^6.0.0",
-    "tesseract.js": "^7.0.0"
+    "tesseract.js": "^7.0.0",
+    "ws": "^8.20.0"
   },
   "devDependencies": {
+    "@types/express": "^5.0.6",
     "@types/node": "^22.14.0",
     "@types/pdfjs-dist": "^2.10.377",
+    "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "^5.0.0",
+    "esbuild": "^0.28.0",
+    "tsx": "^4.21.0",
     "typescript": "~5.8.2",
-    "vite": "^6.2.0"
+    "vite": "^6.4.2"
   }
 }

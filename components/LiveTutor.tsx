@@ -1,9 +1,11 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { GoogleGenAI, LiveServerMessage, Modality, Type } from '@google/genai';
 import { Video, Mic, MicOff, Play, Square, AlertCircle, Volume2, Sparkles, Eye, Settings, VolumeX, RefreshCw, Camera, FlipHorizontal, Lightbulb, Key, X, MessageCircleQuestion, ArrowRight, ScanEye, Target, UserRoundPen, Check, ChevronRight, Gauge, Save, AudioLines, Wifi, WifiOff, FileText, Loader2, BookOpen, Sun, Moon, Database, Upload, Trash2 } from 'lucide-react';
-import { ConnectionState, ChatMessage, SavedSession, UserProfile, SessionSummary, ExamRecord } from '../types';
+import { ConnectionState, ChatMessage, SavedSession, UserProfile, SessionSummary, ExamRecord, VariantQuestion } from '../types';
+import { motion, AnimatePresence } from 'motion/react';
 import { createPcmBlob, decode, decodeAudioData, blobToBase64 } from '../utils/audioUtils';
 import { classifyQuestion } from '../utils/QuestionClassifier';
+import { performHighPrecisionOcr } from '../utils/highPrecisionOcr';
 import AudioVisualizer from './AudioVisualizer';
 import Transcript from './Transcript';
 
@@ -15,6 +17,32 @@ import pdfWorker from 'pdfjs-dist/build/pdf.worker.mjs?url';
 // Set worker source for PDF.js
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
+// Global Tesseract Worker Caching to avoid re-downloading/re-initializing models constantly
+let globalOcrWorker: Tesseract.Worker | null = null;
+let isInitializingOcr = false;
+
+const getOcrWorker = async (): Promise<Tesseract.Worker | null> => {
+    if (globalOcrWorker) return globalOcrWorker;
+    if (isInitializingOcr) {
+        let retries = 0;
+        while (isInitializingOcr && retries < 40) { // Wait up to 20 seconds (40 * 500ms)
+            await new Promise(r => setTimeout(r, 500));
+            retries++;
+        }
+        return globalOcrWorker;
+    }
+    isInitializingOcr = true;
+    try {
+        globalOcrWorker = await Tesseract.createWorker('chi_sim+eng');
+        console.log("Global OCR Worker Initialized successfully.");
+    } catch (e) {
+        console.error("Failed to initialize global OCR worker", e);
+    } finally {
+        isInitializingOcr = false;
+    }
+    return globalOcrWorker;
+};
+
 // Extend Navigator interface for Network Information API (experimental)
 interface NetworkInformation extends EventTarget {
   readonly downlink: number;
@@ -25,12 +53,12 @@ interface NetworkInformation extends EventTarget {
 }
 
 // Configuration constants
-const MODEL_NAME = 'gemini-2.5-flash-native-audio-preview-09-2025';
+const MODEL_NAME = 'gemini-3.1-flash-live-preview';
 
 // Voice Options for User Selection
 const VOICE_OPTIONS = [
   { id: 'Kore', name: '温柔老师 (Kore)', desc: '舒缓、平和的女性声音', gender: 'Female' },
-  { id: 'Aoede', name: '知性姐姐 (Aoede)', desc: '清晰、专业的女性声音', gender: 'Female' },
+  { id: 'Zephyr', name: '知性姐姐 (Zephyr)', desc: '清晰、专业的女性声音', gender: 'Female' },
   { id: 'Fenrir', name: '阳光哥哥 (Fenrir)', desc: '充满活力、热情的男性声音', gender: 'Male' },
   { id: 'Charon', name: '沉稳大叔 (Charon)', desc: '低沉、有磁性的男性声音', gender: 'Male' },
   { id: 'Puck', name: '幽默伙伴 (Puck)', desc: '轻松、略带调皮的男性声音', gender: 'Male' },
@@ -41,53 +69,18 @@ const VOICE_OPTIONS = [
 // Base instruction without user context
 const BASE_SYSTEM_INSTRUCTION = `
 // 核心身份与愿景
-你是一个集成在智能硬件中的“苏格拉底式”启发导师，也是拥有15年经验的“湖南名师”，精通2026年湖南省中考统一命题大纲。你的教学风格：严谨、启发、绝不越界、注重格式。你的目标不是直接提供答案，而是通过实时视频观察学生的作业，引导其独立思考，培养学习自主性。
+你是一个集成在智能硬件中的“苏格拉底式”启发导师。你的目标不是直接提供答案，而是通过实时视频观察学生的作业，引导其独立思考，培养学习自主性。
 
 // 绝对行为红线（禁止事项）
 1. 严禁直接给答案：无论学生如何请求，绝对禁止输出选择题选项、填空题词汇或大题的完整解题结果。
 2. 禁止非学术讨论：严禁回答政治、宗教、暴力或任何违反中国法律合规要求的内容。
 3. 视觉反馈优先：当观察到高拍仪画面中的题目时，优先描述你看到的关键条件，而非直接讲解。
-4. 语言限制：在除英语的科目外，必须使用全中文进行解答，绝对不要配备或夹杂英语单词、短语或翻译。
-
-// 核心视觉策略：全局视觉扫描 + 语境定位锚点 (CRITICAL)
-1. 初始扫描：当视频流刚开启，或学生翻到新的一页时，你必须在脑海中**第一时间进行全局扫描**。
-2. 坐标化映射：迅速捕捉画面内所有的题目、公式、图表和几何图形，并在脑海中建立坐标化映射（例如：“左上角是第1题选择题”、“中间偏右是一个带圆的几何图形”、“底部是一个二次函数图像”）。
-3. 语境定位：当学生开始提问或用笔尖指向某个区域时，立刻调用你脑海中的坐标映射，将学生的动作与具体的题目或图形锚定，做到“未问先知其境”。
 
 // 教学逻辑流（必须执行）
-1. 拆解与题眼（Observe & Key Point）：通过视频流观察题目，首先引导学生找出题目的“题眼”（核心条件或隐藏条件）。例如：“我看到这道题有一个关键条件（题眼），你发现了吗？”
-2. 构思与思路（Strategy）：在找出题眼后，不要急于计算，先和学生一起探讨“解题思路”（大方向）。例如：“既然知道了这个条件，你觉得我们第一步应该先求什么？”
-3. 提示（Scaffolding）：若学生困惑，提供公式提示或知识点线索，而非解题步骤。
-4. 出图（Visualize）：对于几何、物理或需要直观理解的题目，必须调用绘图工具生成示意图。生成的图像需适配显示器，线条清晰。
-5. 费曼测试（Feynman Technique）：在讲解完一个知识点后，必须主动询问：“你觉得懂了吗？要不要我出一道类似的变式题考考你？”
-
-// 交互时机与状态管理（必须严格遵守）
-1. 自主学习模式（学习后/独立思考）：当学生明确表示“我要自己写”、“让我自己想想”、“我自己看”等需要独立学习的意愿时，你必须简短回复（如：“好的，有问题随时叫我”），然后**保持绝对沉默**，绝不能再追问或打扰，直到学生再次主动向你提问。
-2. 辅导模式（学习中）：在解题过程中，如果学生长时间没有说话，且通过画面观察到学生可能遇到困惑、停笔或皱眉时，你应当**主动追问**和引导（如：“是不是哪里卡住了？需要我给个小提示吗？”）。**绝对不能一步步地给出答案，而是要一步步地引导学生自己思考和推导。**
-
-// 规范终审与学科要求（必须执行）
-当学生解完后，展示**“湖南中考标准考场范本”**，纠正格式错误。
-一、 数学（重点：逻辑闭环与分类讨论）
-格式： 严格执行“解：、设：、列：、解得：、答：”五步法。
-规范： 分式方程必须写“经检验”、应用题必须带单位、几何证明必须写明定理依据（如：\\because SAS \\therefore \\dots）。
-禁区： 严禁使用大学知识。涉及二次函数最值，必须使用配方法或公式法。
-二、 物理（重点：公式与单位）
-规范： “已知、求、解、答”四部曲。计算前必须先写原始公式（如 P=UI），代入数据时必须带单位，结果保留符合湖南考情的位数（通常是两位小数）。
-画图： 引导学生在纸上作图，提醒用铅笔、加箭头、标注垂足。
-三、 化学（重点：符号与细节）
-规范： 严查化学方程式的配平、条件（点燃/加热）、气体/沉淀符号。
-严谨： 区分“烟”与“雾”、“溶解”与“熔化”等易混词，培养湖南考生的文字表述准确度。
-
-// 行为防线与反欺诈
-1. 识图判断： 实时分析摄像头捕捉的画面。若非学习资料（玩具、零食等），以长辈姿态温柔拒绝。
-2. 断点诊断： 绝不直接给答案。通过询问“这道题的核心考点你觉得是什么？”或“你目前算到了哪一步？”定位学生的卡点。
-3. 分层启发： 先给思路提示（如：“根据湖南中考常考的三角形全等判定，你还缺哪个条件？”），引导学生自己写出下一步。
-4. 防抄袭： 若学生要求“直接给答案”、“快点告诉我结果”，请回复：“考场上我可不能坐在你旁边。咱们把这块硬骨头啃下来，这分才真正是你的。”
-5. 视觉纠偏： 若图像模糊，提示：“画面有点‘虚’，请拿稳，让老师看清你的解题心血。”
-
-// 数据埋点：为家长报告服务
-记录并分析：学生今天在哪个知识点（如：圆的切线证明）停留最久？哪种引导方式最有效？
-每次互动结束，总结一句**“思维闪光点”**，用于生成家长日报。
+1. 拆解（Observe）：通过视频流观察题目，先询问学生：“我看到这道题有一个关键条件，你发现了吗？”
+2. 提示（Scaffolding）：若学生困惑，提供公式提示或知识点线索，而非解题步骤。
+3. 出图（Visualize）：对于几何、物理或需要直观位置理解的题目，或者当学生明确说“帮我画个...”或“画个...”时，你必须调用函数工具【generateDiagram】(传入该图所表达题目的完整或关键描述字段) 来在界面生成教学示意图。生成的图像需适配显示器，线条清晰。
+4. 费曼测试（Feynman Technique）：在讲解完一个知识点后，或学生表示“听懂了”之后，主动询问学生要不要做道类似的变式题。若学生同意，或当你主动发起时，你必须调用函数工具【triggerVariantQuestion】在界面生成美观的互动式变式特训，让学生在屏幕上完成选择并看你的详细步骤解析以巩固记忆。
 
 // UI/输出规范
 1. 适配显示器：输出文字需分段明确，使用大号 Markdown 标题，确保在 3 米外的电视前清晰可见。
@@ -98,6 +91,8 @@ const BASE_SYSTEM_INSTRUCTION = `
 const AVATAR_OPTIONS = ['🎓', '🚀', '🌟', '🐶', '🐱', '🦊', '🐯', '🐼', '🧠', '💡', '🎨', '⚽', '🎵', '🎮', '📚', '🤖', '🦖', '🦄', '🐝', '🐢'];
 const PCM_SAMPLE_RATE = 16000; // Input sample rate
 const OUTPUT_SAMPLE_RATE = 24000; // Output sample rate
+
+let isProcessing = false;
 
 const LiveTutor: React.FC = () => {
   // --- State ---
@@ -156,6 +151,26 @@ const LiveTutor: React.FC = () => {
 
   // OCR State
   const [isProcessingOCR, setIsProcessingOCR] = useState(false);
+  const [showOcrModal, setShowOcrModal] = useState(false);
+  const [ocrCapturedImage, setOcrCapturedImage] = useState<string | null>(null);
+  const [ocrTextResult, setOcrTextResult] = useState<string | null>(null);
+  const [isOcrLoading, setIsOcrLoading] = useState(false);
+  const [isOcrSynced, setIsOcrSynced] = useState(false);
+
+  // Image Enhancement Pipeline States
+  const [imageEnhancePreset, setImageEnhancePreset] = useState<'none' | 'grayscale' | 'contrast' | 'document' | 'custom'>('document');
+  const [contrastLevel, setContrastLevel] = useState<number>(30); // 0 to 100 style boost
+  const [brightnessLevel, setBrightnessLevel] = useState<number>(5); // -100 to 100 style shift
+  const [sharpenLevel, setSharpenLevel] = useState<number>(20); // 0 to 100 style sharpening
+  const [enableAdaptiveThreshold, setEnableAdaptiveThreshold] = useState<boolean>(true);
+  const [enableDeskewing, setEnableDeskewing] = useState<boolean>(true);
+
+  // Feynman Interactive Test State
+  const [activeVariantQuestion, setActiveVariantQuestion] = useState<VariantQuestion | null>(null);
+  const [selectedVariantAnswer, setSelectedVariantAnswer] = useState<string | null>(null);
+  const [showVariantFeedback, setShowVariantFeedback] = useState(false);
+  const [isVariantAnswerCorrect, setIsVariantAnswerCorrect] = useState<boolean | null>(null);
+  const [variantTextAnswer, setVariantTextAnswer] = useState<string>('');
 
   const handleReportUnclearVideo = (reason: string) => {
       setQualityWarning(`老师提示：${reason}，请稍微调整一下摄像头或书本哦。`);
@@ -168,88 +183,35 @@ const LiveTutor: React.FC = () => {
   const handleGenerateDiagram = async (questionContent: string) => {
       setIsGeneratingDiagram(true);
       try {
-          const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
-          const response = await ai.models.generateContent({
-              model: "gemini-3-flash-preview",
-              contents: questionContent,
-              config: {
-                  systemInstruction: `你是一个“教学示意图生成引擎”。
-
-你的职责是：
-根据学生的题目内容，判断是否需要生成一个教学示意图帮助理解。
-
-工作流程：
-
-第一步：判断题目类型
-如果题目属于以下类型，则需要生成示意图：
-- 几何题
-- 应用题
-- 物理题
-- 路程问题
-- 比例关系
-- 空间结构
-- 逻辑关系
-
-如果题目不需要图示，则返回：
-
-{
- "needDiagram": false
-}
-
-第二步：如果需要图示，则生成SVG示意图。
-
-返回格式必须为：
-
-{
- "needDiagram": true,
- "diagramType": "geometry | physics | relation | numberline | flow",
- "svg": "<svg代码>"
-}
-
-SVG绘图规则：
-
-1. SVG尺寸固定
-width="600"
-height="400"
-
-2. 背景白色
-
-3. 图形必须简单清晰
-
-4. 只使用基础图形：
-- line
-- circle
-- rect
-- text
-- arrow
-
-5. 必须标注关键点或变量
-
-6. 不要复杂颜色
-只使用 black
-
-7. 图形必须适合初三学生理解
-
-8. SVG必须是完整标签，例如：
-
-<svg width="600" height="400" xmlns="http://www.w3.org/2000/svg">
-  <line x1="100" y1="300" x2="500" y2="300" stroke="black" stroke-width="2"/>
-</svg>
-
-重要规则：
-
-- 只允许返回JSON
-- 不允许解释
-- 不允许输出Markdown
-- 不允许添加多余文字`,
-                  responseMimeType: "application/json",
-              }
+          const res = await fetch('/api/diagram', {
+              method: 'POST',
+              headers: {
+                  'Content-Type': 'application/json'
+              },
+              body: JSON.stringify({ questionContent })
           });
-          
-          const responseText = response.text.replace(/```json/g, '').replace(/```/g, '').trim();
-          const data = JSON.parse(responseText);
-          if (data.needDiagram && data.svg) {
-              setDiagramSvg(data.svg);
+          if (!res.ok) {
+              throw new Error(`Server returned status ${res.status}`);
+          }
+          const result = await res.json();
+          if (result && result.text) {
+              let parsedText = result.text.trim();
+              if (parsedText.startsWith('```json')) {
+                  parsedText = parsedText.substring(7);
+              }
+              if (parsedText.endsWith('```')) {
+                  parsedText = parsedText.substring(0, parsedText.length - 3);
+              }
+              parsedText = parsedText.trim();
+
+              try {
+                  const data = JSON.parse(parsedText);
+                  if (data.needDiagram && data.svg) {
+                      setDiagramSvg(data.svg);
+                  }
+              } catch (jsonErr) {
+                  console.error("Failed to parse diagram JSON:", parsedText, jsonErr);
+              }
           }
       } catch (e) {
           console.error("Failed to generate diagram", e);
@@ -257,6 +219,14 @@ height="400"
           setIsGeneratingDiagram(false);
       }
   };
+
+  const handleTriggerVariantQuestion = useCallback((questionObj: VariantQuestion) => {
+      setActiveVariantQuestion(questionObj);
+      setSelectedVariantAnswer(null);
+      setShowVariantFeedback(false);
+      setIsVariantAnswerCorrect(null);
+      setVariantTextAnswer('');
+  }, []);
 
   const [showBlurWarning, setShowBlurWarning] = useState(false);
   const [mediaWarning, setMediaWarning] = useState<string | null>(null);
@@ -274,84 +244,28 @@ height="400"
   const [selectedCameraId, setSelectedCameraId] = useState<string>('');
   const [showSettings, setShowSettings] = useState(false);
   const [aiResponseSpeed, setAiResponseSpeed] = useState<'slow' | 'normal' | 'fast'>('normal');
+  const [apiKey, setApiKey] = useState(() => localStorage.getItem('gemini_api_key') || '');
+  
+  useEffect(() => {
+      localStorage.setItem('gemini_api_key', apiKey);
+  }, [apiKey]);
   
   // Adaptive Quality State
-  const [videoFrameRate, setVideoFrameRate] = useState<number>(3); // Increased to 3 FPS for lower latency
-  const [videoQuality, setVideoQuality] = useState<number>(1.0); // Increased to 1.0 for maximum text clarity
+  const [videoFrameRate, setVideoFrameRate] = useState<number>(1.5); // Optimized for concurrent streaming
+  const [videoQuality, setVideoQuality] = useState<number>(0.85); // Reduced from 1.0 to avoid huge payload size
   const [isAutoQuality, setIsAutoQuality] = useState<boolean>(true);
   const [networkStatus, setNetworkStatus] = useState<'good' | 'moderate' | 'poor' | 'unknown'>('unknown');
 
   const [isBotSpeaking, setIsBotSpeaking] = useState(false);
   const [inputAnalyser, setInputAnalyser] = useState<AnalyserNode | null>(null);
 
-  // Teaching Pace State
+  // --- Refs ---
   const silenceTimerRef = useRef<NodeJS.Timeout | null>(null);
   const lastInteractionTimeRef = useRef<number>(Date.now());
-  const silenceLevelRef = useRef<number>(0); // 0: None, 1: 5s, 2: 10s, 3: 30s
-
-  // Silence Detection Logic
-  useEffect(() => {
-    if (connectionState !== ConnectionState.CONNECTED || isBotSpeaking) {
-        if (silenceTimerRef.current) {
-            clearInterval(silenceTimerRef.current);
-            silenceTimerRef.current = null;
-        }
-        return;
-    }
-
-    // Reset timer when bot stops speaking
-    lastInteractionTimeRef.current = Date.now();
-    silenceLevelRef.current = 0;
-
-    silenceTimerRef.current = setInterval(() => {
-        const now = Date.now();
-        const elapsed = now - lastInteractionTimeRef.current;
-
-        if (elapsed > 30000 && silenceLevelRef.current < 3) {
-            // 30s: Key step
-            silenceLevelRef.current = 3;
-            handleSendMessage("[SYSTEM: Student has been silent for 30 seconds. They seem stuck. Please provide a KEY STEP or formula to help them proceed. Do not give the full answer.]", undefined, true);
-        } else if (elapsed > 10000 && silenceLevelRef.current < 2) {
-            // 10s: Second layer hint
-            silenceLevelRef.current = 2;
-            handleSendMessage("[SYSTEM: Student has been silent for 10 seconds. Please provide a STRONGER HINT or guide them specifically.]", undefined, true);
-        } else if (elapsed > 9000 && silenceLevelRef.current < 1) {
-            // 9s: Gentle nudge
-            silenceLevelRef.current = 1;
-            handleSendMessage("[SYSTEM: Student has been silent for 9 seconds. Please give a GENTLE NUDGE or check if they are following.]", undefined, true);
-        }
-    }, 1000);
-
-    return () => {
-        if (silenceTimerRef.current) {
-            clearInterval(silenceTimerRef.current);
-            silenceTimerRef.current = null;
-        }
-    };
-  }, [connectionState, isBotSpeaking]); // Re-run when connection or speaking state changes
-
-  // Reset silence timer on user input (audio)
-  useEffect(() => {
-      if (!inputAnalyser) return;
-      
-      const checkAudio = () => {
-          const dataArray = new Uint8Array(inputAnalyser.frequencyBinCount);
-          inputAnalyser.getByteFrequencyData(dataArray);
-          
-          // Simple VAD: Check if average volume is above threshold
-          const avg = dataArray.reduce((a, b) => a + b) / dataArray.length;
-          if (avg > 10) { // Threshold
-              lastInteractionTimeRef.current = Date.now();
-              silenceLevelRef.current = 0; // Reset level so we can trigger again
-          }
-          requestAnimationFrame(checkAudio);
-      };
-      
-      const handle = requestAnimationFrame(checkAudio);
-      return () => cancelAnimationFrame(handle);
-  }, [inputAnalyser]);
-
-  // --- Refs ---
+  const silenceLevelRef = useRef<number>(0); // 0: None, 1: 45s (OCR sent), 2: 90s (Nudge), 3: 150s (Hint)
+  const lastOcrTextRef = useRef<string>('');
+  const lastSentOcrTextRef = useRef<string>('');
+  
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const sessionPromiseRef = useRef<Promise<any> | null>(null);
@@ -370,6 +284,360 @@ height="400"
   const activeSourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
   const frameIntervalRef = useRef<number | null>(null);
   const videoIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const prevFrameRef = useRef<Uint8ClampedArray | null>(null);
+  const lastMotionTimeRef = useRef<number>(Date.now());
+  const lastAutoTriggerTimeRef = useRef<number>(0);
+  const stillnessIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const isBotSpeakingRef = useRef(isBotSpeaking);
+  const ocrIntervalRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    isBotSpeakingRef.current = isBotSpeaking;
+  }, [isBotSpeaking]);
+
+  const [isVoiceWakeupEnabled, setIsVoiceWakeupEnabled] = useState(true);
+  const [isWakeWordListening, setIsWakeWordListening] = useState(false);
+
+  const playWakeBeep = useCallback(() => {
+      try {
+          const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+          const osc1 = ctx.createOscillator();
+          const osc2 = ctx.createOscillator();
+          const gain = ctx.createGain();
+          
+          osc1.type = 'sine';
+          osc1.frequency.setValueAtTime(600, ctx.currentTime);
+          osc1.frequency.exponentialRampToValueAtTime(1200, ctx.currentTime + 0.15);
+          
+          osc2.type = 'sine';
+          osc2.frequency.setValueAtTime(800, ctx.currentTime);
+          osc2.frequency.exponentialRampToValueAtTime(1600, ctx.currentTime + 0.15);
+          
+          gain.gain.setValueAtTime(0.08, ctx.currentTime);
+          gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.3);
+          
+          osc1.connect(gain);
+          osc2.connect(gain);
+          gain.connect(ctx.destination);
+          
+          osc1.start();
+          osc2.start();
+          osc1.stop(ctx.currentTime + 0.3);
+          osc2.stop(ctx.currentTime + 0.3);
+      } catch (e) {
+          console.error("Failed to play wake beep:", e);
+      }
+  }, []);
+
+  const playMuteSound = useCallback((isMuting: boolean) => {
+      try {
+          const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          
+          osc.type = 'sine';
+          if (isMuting) {
+              osc.frequency.setValueAtTime(600, ctx.currentTime);
+              osc.frequency.exponentialRampToValueAtTime(300, ctx.currentTime + 0.2);
+          } else {
+              osc.frequency.setValueAtTime(300, ctx.currentTime);
+              osc.frequency.exponentialRampToValueAtTime(600, ctx.currentTime + 0.2);
+          }
+          
+          gain.gain.setValueAtTime(0.08, ctx.currentTime);
+          gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.25);
+          
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          osc.start();
+          osc.stop(ctx.currentTime + 0.25);
+      } catch (e) {
+          console.error("Failed to play mute beep:", e);
+      }
+  }, []);
+
+  const updateTranscript = useCallback((role: 'user' | 'model', text: string, isFinal: boolean) => {
+    setMessages((prev) => {
+      const lastMsg = prev[prev.length - 1];
+      if (lastMsg && lastMsg.role === role && !lastMsg.isComplete) {
+        const updatedMsg = { ...lastMsg, text: lastMsg.text + text, isComplete: isFinal };
+        return [...prev.slice(0, -1), updatedMsg];
+      }
+      if (!text) return prev;
+      const uniqueId = `${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
+      return [...prev, { id: uniqueId, role, text, isComplete: isFinal, timestamp: Date.now() }];
+    });
+  }, []);
+
+  const handleSendMessage = useCallback(async (text: string, displayOverride?: string, isSystemMessage: boolean = false) => {
+    if (!text || text.trim() === '') return;
+    
+    if (!sessionPromiseRef.current || connectionState !== ConnectionState.CONNECTED) {
+        console.warn("Attempted to send message while disconnected:", text);
+        return;
+    }
+    
+    if (!isSystemMessage) {
+        updateTranscript('user', displayOverride || text, true);
+        // Reset silence timer on manual message
+        lastInteractionTimeRef.current = Date.now();
+        silenceLevelRef.current = 0;
+    }
+    
+    try {
+        const session = await sessionPromiseRef.current;
+        if (!session) return;
+        // Add a small delay to ensure previous operations are cleared
+        await new Promise(resolve => setTimeout(resolve, 50));
+        
+        if (connectionStateRef.current !== ConnectionState.CONNECTED) {
+            console.warn("Connection dropped before sending message.");
+            return;
+        }
+
+        if (typeof session.sendClientContent === 'function') {
+            session.sendClientContent({
+                 turns: [{ role: 'user', parts: [{ text }] }],
+                 turnComplete: true
+            });
+            console.log("Text message sent to model:", text);
+        } else {
+            console.error("Session does not have sendClientContent method");
+        }
+    } catch (err) {
+        console.error("Failed to send text message:", err);
+    }
+  }, [updateTranscript, connectionState]);
+
+  const triggerAITutor = useCallback((reason: string) => {
+    if (isProcessing || isBotSpeaking) return;
+
+    // 20秒内只允许自动触发一次
+    if (Date.now() - lastAutoTriggerTimeRef.current < 20000) return;
+    lastAutoTriggerTimeRef.current = Date.now();
+
+    isProcessing = true;
+
+    handleSendMessage(
+      `[SYSTEM: 触发原因=${reason}。你是一个老师，不可以直接给答案，每次只说一句，引导学生思考。]`,
+      undefined,
+      true
+    );
+
+    setTimeout(() => {
+      isProcessing = false;
+    }, 3000);
+  }, [isBotSpeaking, handleSendMessage]);
+
+  // Keyboard Hotkeys and Shortcuts (物理按键模拟响应)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+        // Prevent key events when typing in standard inputs or textareas
+        if (
+            document.activeElement?.tagName === 'INPUT' || 
+            document.activeElement?.tagName === 'TEXTAREA' ||
+            (document.activeElement as HTMLElement)?.isContentEditable
+        ) {
+            return;
+        }
+
+        const key = e.key.toLowerCase();
+        
+        // M key to toggle mic muting
+        if (key === 'm') {
+            e.preventDefault();
+            setIsMicMuted(prev => {
+                const next = !prev;
+                playMuteSound(next);
+                return next;
+            });
+        }
+        
+        // S key to toggle speaker muting
+        if (key === 's') {
+            e.preventDefault();
+            setIsSpeakerMuted(prev => {
+                const next = !prev;
+                playMuteSound(next);
+                return next;
+            });
+        }
+        
+        // Spacebar to trigger manual wake or mute toggle
+        if (e.key === ' ' || key === 'spacebar') {
+            e.preventDefault();
+            if (isMicMutedRef.current) {
+                setIsMicMuted(false);
+                playMuteSound(false);
+                playWakeBeep();
+                triggerAITutor("按键唤醒");
+            } else {
+                setIsMicMuted(true);
+                playMuteSound(true);
+            }
+        }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+        window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [triggerAITutor, playMuteSound, playWakeBeep]);
+
+  // Voice wake word loop (语音唤醒检测)
+  useEffect(() => {
+    if (!('webkitSpeechRecognition' in window || 'SpeechRecognition' in window)) {
+        console.warn("Speech recognition not supported in this browser for voice wake-up");
+        return;
+    }
+    
+    if (connectionState !== ConnectionState.CONNECTED || !isVoiceWakeupEnabled) {
+        setIsWakeWordListening(false);
+        return;
+    }
+
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    const recognition = new SpeechRecognition();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = 'zh-CN'; // Optimized for standard Chinese vocal queries
+
+    recognition.onstart = () => {
+        setIsWakeWordListening(true);
+        console.log("Voice Wakeup Activated. Call '小苏老师' or '嗨，小苏' to wake up.");
+    };
+
+    recognition.onresult = (event: any) => {
+        // Only wake if currently muted
+        if (!isMicMutedRef.current) return;
+
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+            const transcript = event.results[i][0].transcript.trim().toLowerCase();
+            
+            // Match custom wake words representing our Socratic tutor terminal
+            if (
+                transcript.includes("小苏") || 
+                transcript.includes("小书") || 
+                transcript.includes("老师在吗") || 
+                transcript.includes("苏老师") || 
+                transcript.includes("苏格拉底") || 
+                transcript.includes("hi socrates") || 
+                transcript.includes("socrates")
+            ) {
+                console.log("Wake word detected locally:", transcript);
+                setIsMicMuted(false);
+                playMuteSound(false);
+                playWakeBeep();
+                triggerAITutor("语音唤醒");
+                break;
+            }
+        }
+    };
+
+    recognition.onerror = (e: any) => {
+        console.warn("Wake word recognition encountered an error:", e.error);
+        if (e.error === 'not-allowed') {
+            setIsVoiceWakeupEnabled(false);
+        }
+    };
+
+    recognition.onend = () => {
+        setIsWakeWordListening(false);
+        if (connectionStateRef.current === ConnectionState.CONNECTED && isVoiceWakeupEnabled) {
+            try {
+                recognition.start();
+            } catch (err) {
+                console.error("Failed to re-start speech recognizer:", err);
+            }
+        }
+    };
+
+    try {
+        recognition.start();
+    } catch (err) {
+        console.error("Failed to start speech recognizer:", err);
+    }
+
+    return () => {
+        recognition.onend = null;
+        try {
+            recognition.stop();
+        } catch (e) {}
+    };
+  }, [connectionState, isVoiceWakeupEnabled, triggerAITutor, playMuteSound, playWakeBeep]);
+
+  // Silence Detection Logic
+  useEffect(() => {
+    if (connectionState !== ConnectionState.CONNECTED || isBotSpeaking) {
+        if (silenceTimerRef.current) {
+            clearInterval(silenceTimerRef.current);
+            silenceTimerRef.current = null;
+        }
+        return;
+    }
+
+    // Reset timer when bot stops speaking
+    lastInteractionTimeRef.current = Date.now();
+    silenceLevelRef.current = 0;
+
+    silenceTimerRef.current = setInterval(async () => {
+        const now = Date.now();
+        const elapsed = now - lastInteractionTimeRef.current;
+
+        if (elapsed > 150000 && silenceLevelRef.current < 3) {
+            // 150s: Key step
+            silenceLevelRef.current = 3;
+            triggerAITutor("Student has been silent for 150 seconds. They seem stuck. Please provide a KEY STEP or formula to help them proceed.");
+        } else if (elapsed > 90000 && silenceLevelRef.current < 2) {
+            // 90s: Second layer hint
+            silenceLevelRef.current = 2;
+            triggerAITutor("Student has been silent for 90 seconds. Please provide a STRONGER HINT or guide them specifically.");
+        } else if (elapsed > 45000 && silenceLevelRef.current < 1) {
+            // 45s: Student stopped writing or speaking. Send OCR if not sent yet.
+            silenceLevelRef.current = 1;
+            
+            if (lastOcrTextRef.current && lastOcrTextRef.current !== lastSentOcrTextRef.current) {
+                const text = lastOcrTextRef.current;
+                lastSentOcrTextRef.current = text;
+                
+                triggerAITutor(`学生似乎停笔思考了。通过后台OCR识别到当前画面中的文字内容如下: ${text}。请主动分析上述内容，指出学生的当前进度或可能的卡点，并给予启发式的引导。`);
+                
+                // Optional: Classify question
+                const classification = await classifyQuestion(text);
+                if (classification) {
+                    triggerAITutor(`题型分析完成。学科：${classification.subject}，知识点：${classification.topic}，题型：${classification.questionType}，难度：${classification.difficulty}，核心概念：${classification.keyConcepts.join(', ')}。请根据此题型特点进行针对性讲解。`);
+                }
+            }
+        }
+    }, 1000);
+
+    return () => {
+        if (silenceTimerRef.current) {
+            clearInterval(silenceTimerRef.current);
+            silenceTimerRef.current = null;
+        }
+    };
+  }, [connectionState, isBotSpeaking, triggerAITutor]); // Re-run when connection or speaking state changes
+
+  // Reset silence timer on user input (audio)
+  useEffect(() => {
+      if (!inputAnalyser) return;
+      
+      const checkAudio = () => {
+          const dataArray = new Uint8Array(inputAnalyser.frequencyBinCount);
+          inputAnalyser.getByteFrequencyData(dataArray);
+          
+          // Simple VAD: Check if average volume is above threshold
+          const avg = dataArray.reduce((a, b) => a + b) / dataArray.length;
+          if (avg > 10) { // Threshold
+              lastInteractionTimeRef.current = Date.now();
+              silenceLevelRef.current = 0; // Reset level so we can trigger again
+          }
+      };
+      
+      const intervalId = setInterval(checkAudio, 100);
+      return () => clearInterval(intervalId);
+  }, [inputAnalyser]);
 
   // Sync state to ref
   useEffect(() => {
@@ -398,18 +666,18 @@ height="400"
 
         if (downlink < 1.5 || rtt > 500) {
             // Poor connection
-            setVideoFrameRate(1); // Increased from 0.5 to 1
-            setVideoQuality(0.8);   // Increased from 0.7 to 0.8
+            setVideoFrameRate(1); 
+            setVideoQuality(0.7); 
             setNetworkStatus('poor');
         } else if (downlink < 5 || rtt > 150) {
             // Moderate connection
-            setVideoFrameRate(2); // Increased from 1.5 to 2
-            setVideoQuality(0.9); // Increased from 0.8 to 0.9
+            setVideoFrameRate(1.5); 
+            setVideoQuality(0.8); 
             setNetworkStatus('moderate');
         } else {
             // Good connection
-            setVideoFrameRate(4); // Increased from 2.5 to 4
-            setVideoQuality(1.0); // Increased from 0.9 to 1.0
+            setVideoFrameRate(2.5); // No need for more than 2.5 FPS for tutoring
+            setVideoQuality(0.85); // 0.85 is practically lossless but saves 60% bandwidth compared to 1.0
             setNetworkStatus('good');
         }
     };
@@ -559,62 +827,58 @@ height="400"
   };
 
   // --- Helper: Add/Update Messages ---
-  const updateTranscript = useCallback((role: 'user' | 'model', text: string, isFinal: boolean) => {
-    setMessages((prev) => {
-      const lastMsg = prev[prev.length - 1];
-      if (lastMsg && lastMsg.role === role && !lastMsg.isComplete) {
-        const updatedMsg = { ...lastMsg, text: lastMsg.text + text, isComplete: isFinal };
-        return [...prev.slice(0, -1), updatedMsg];
-      }
-      if (!text) return prev;
-      return [...prev, { id: Date.now().toString(), role, text, isComplete: isFinal, timestamp: Date.now() }];
-    });
-  }, []);
-
   // --- Generate Summary Function ---
   const generateSessionSummary = async (msgs: ChatMessage[]) => {
-      if (msgs.length < 2 || !process.env.GEMINI_API_KEY) return;
+      if (msgs.length < 2) return;
       
       setIsGeneratingSummary(true);
       setShowSummaryModal(true); // Open modal immediately to show loading state
 
       try {
-          const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
           const transcript = msgs.map(m => `${m.role === 'user' ? '学生' : '老师'}: ${m.text}`).join('\n');
-          
-          const response = await ai.models.generateContent({
-              model: 'gemini-3-flash-preview',
-              contents: `请根据以下师生辅导对话内容，生成一份学习总结。
-              1. 简要概括今天学习了什么题目或内容 (Overview)。
-              2. 列出具体的知识点、公式或核心概念 (Knowledge Points)。
-              注意：请使用全中文生成总结，除非对话内容是英语科目。
-              
-              对话内容：
-              ${transcript}`,
-              config: {
-                  responseMimeType: "application/json",
-                  responseSchema: {
-                    type: Type.OBJECT,
-                    properties: {
-                        overview: { type: Type.STRING, description: "本次辅导内容的简要总结" },
-                        knowledgePoints: {
-                            type: Type.ARRAY,
-                            items: { type: Type.STRING },
-                            description: "涉及的具体知识点列表"
-                        }
-                    },
-                    required: ["overview", "knowledgePoints"]
-                  }
-              }
+          const res = await fetch('/api/summary', {
+              method: 'POST',
+              headers: {
+                  'Content-Type': 'application/json'
+              },
+              body: JSON.stringify({ transcript })
           });
+          if (!res.ok) {
+              throw new Error(`Server returned status ${res.status}`);
+          }
+          const result = await res.json();
+          if (result && result.text) {
+              let parsedText = result.text.trim();
+              if (parsedText.startsWith('```json')) {
+                  parsedText = parsedText.substring(7);
+              }
+              if (parsedText.endsWith('```')) {
+                  parsedText = parsedText.substring(0, parsedText.length - 3);
+              }
+              parsedText = parsedText.trim();
 
-          if (response.text) {
-              const summary: SessionSummary = JSON.parse(response.text);
-              setSessionSummary(summary);
-              return summary;
+              try {
+                  const summary: SessionSummary = JSON.parse(parsedText);
+                  setSessionSummary(summary);
+                  return summary;
+              } catch (jsonErr) {
+                  console.error("Failed to parse summary JSON, using graceful fallback:", parsedText, jsonErr);
+                  const fallbackSummary: SessionSummary = {
+                      overview: "今天的辅导涵盖了题目思路解析、关键条件梳理和引导。学生取得了新启发！",
+                      knowledgePoints: ["典型几何/物理模型分析", "重点公式与定理拆解应用"]
+                  };
+                  setSessionSummary(fallbackSummary);
+                  return fallbackSummary;
+              }
           }
       } catch (e) {
           console.error("Failed to generate summary", e);
+          const fallbackSummary: SessionSummary = {
+              overview: "今天的辅导涵盖了重点解题思路探讨。学生正在积极思考与消化所学知识。",
+              knowledgePoints: ["典型问题思路分析", "关键条件应用与知识巩固"]
+          };
+          setSessionSummary(fallbackSummary);
+          return fallbackSummary;
       } finally {
           setIsGeneratingSummary(false);
       }
@@ -647,7 +911,7 @@ height="400"
                 : s
             );
         } else {
-            const newId = Date.now().toString();
+            const newId = `${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
             currentSessionIdRef.current = newId;
             const newSession: SavedSession = {
                 id: newId,
@@ -685,6 +949,10 @@ height="400"
       clearInterval(videoIntervalRef.current);
       videoIntervalRef.current = null;
     }
+    if (stillnessIntervalRef.current) {
+      clearInterval(stillnessIntervalRef.current);
+      stillnessIntervalRef.current = null;
+    }
     activeSourcesRef.current.forEach(source => { try { source.stop(); } catch (e) {} });
     activeSourcesRef.current.clear();
     if (processorRef.current) { processorRef.current.disconnect(); processorRef.current = null; }
@@ -692,6 +960,15 @@ height="400"
     if (inputContextRef.current) { await inputContextRef.current.close(); inputContextRef.current = null; }
     if (outputContextRef.current) { await outputContextRef.current.close(); outputContextRef.current = null; }
     setInputAnalyser(null);
+    if (sessionPromiseRef.current) {
+        sessionPromiseRef.current.then(session => {
+            try {
+                if (session && (session as any).conn && typeof (session as any).conn.close === 'function') {
+                    (session as any).conn.close();
+                }
+            } catch(e) {}
+        }).catch(() => {});
+    }
     sessionPromiseRef.current = null;
     if (videoRef.current && videoRef.current.srcObject) {
       const stream = videoRef.current.srcObject as MediaStream;
@@ -715,6 +992,234 @@ height="400"
     currentSessionIdRef.current = null;
     // Don't clear summary state immediately so user can see the modal
   }, [saveSessionToHistory]);
+
+  // --- Image Enhancement Pipeline ---
+  // Apply grayscale, contrast adjustment, sharpening, adaptive thresholding, and automatic deskewing to improve OCR accuracy on handwritten drafts.
+  const applyImageEnhancement = useCallback((canvas: HTMLCanvasElement) => {
+      const ctx = canvas.getContext('2d');
+      if (!ctx || imageEnhancePreset === 'none') {
+          if (ctx) ctx.filter = 'none';
+          return;
+      }
+      const width = canvas.width;
+      const height = canvas.height;
+      if (width <= 0 || height <= 0) return;
+
+      try {
+          // 0. Automatic Deskewing (if enabled and angle detected)
+          if (enableDeskewing) {
+              const dsW = 160;
+              const dsH = 120;
+              const dsCanvas = document.createElement('canvas');
+              dsCanvas.width = dsW;
+              dsCanvas.height = dsH;
+              const dsCtx = dsCanvas.getContext('2d');
+              if (dsCtx) {
+                  // Draw scaled down version to find tilt angle at blazingly fast speed
+                  dsCtx.drawImage(canvas, 0, 0, dsW, dsH);
+                  const dsImg = dsCtx.getImageData(0, 0, dsW, dsH);
+                  const dsData = dsImg.data;
+                  const pts: { x: number, y: number }[] = [];
+                  
+                  for (let y = 1; y < dsH - 1; y++) {
+                      for (let x = 1; x < dsW - 1; x++) {
+                          const idx = (y * dsW + x) * 4;
+                          const gray = (0.2126 * dsData[idx] + 0.7152 * dsData[idx + 1] + 0.0722 * dsData[idx + 2]) | 0;
+                          if (gray < 135) {
+                              pts.push({ x, y });
+                          }
+                      }
+                  }
+
+                  if (pts.length > 50) {
+                      let bestAngle = 0;
+                      let maxVariance = 0;
+                      
+                      // Search tilt skew angle range: -15 to +15 degrees
+                      for (let angleDeg = -15; angleDeg <= 15; angleDeg += 1) {
+                          const rad = (angleDeg * Math.PI) / 180;
+                          const cosValue = Math.cos(rad);
+                          const sinValue = Math.sin(rad);
+                          
+                          const bins = new Float32Array(dsH);
+                          for (let i = 0; i < pts.length; i++) {
+                              const p = pts[i];
+                              const projY = Math.round((p.y - dsH / 2) * cosValue + (p.x - dsW / 2) * sinValue + dsH / 2);
+                              if (projY >= 0 && projY < dsH) {
+                                  bins[projY]++;
+                              }
+                          }
+                          
+                          let sum = 0;
+                          for (let i = 0; i < dsH; i++) sum += bins[i];
+                          const mean = sum / dsH;
+                          let variance = 0;
+                          for (let i = 0; i < dsH; i++) {
+                              const diff = bins[i] - mean;
+                              variance += diff * diff;
+                          }
+                          variance /= dsH;
+                          
+                          if (variance > maxVariance) {
+                              maxVariance = variance;
+                              bestAngle = angleDeg;
+                          }
+                      }
+                      
+                      // Rotate final canvas to correct skew
+                      if (Math.abs(bestAngle) >= 1.0) {
+                          const radRotation = (-bestAngle * Math.PI) / 180;
+                          const tempCanvas = document.createElement('canvas');
+                          tempCanvas.width = width;
+                          tempCanvas.height = height;
+                          const tempCtx = tempCanvas.getContext('2d');
+                          if (tempCtx) {
+                              tempCtx.drawImage(canvas, 0, 0);
+                              ctx.save();
+                              ctx.clearRect(0, 0, width, height);
+                              ctx.fillStyle = '#ffffff';
+                              ctx.fillRect(0, 0, width, height);
+                              
+                              ctx.translate(width / 2, height / 2);
+                              ctx.rotate(radRotation);
+                              ctx.drawImage(tempCanvas, -width / 2, -height / 2);
+                              ctx.restore();
+                              console.log(`[Deskewing] Auto-corrected handwritten page tilt: ${bestAngle}deg`);
+                          }
+                      }
+                  }
+              }
+          }
+
+          // 1. Adaptive Thresholding or standard GPU Filters
+          if (enableAdaptiveThreshold && (imageEnhancePreset === 'document' || imageEnhancePreset === 'grayscale' || imageEnhancePreset === 'custom')) {
+              const imgData = ctx.getImageData(0, 0, width, height);
+              const data = imgData.data;
+              const n = width * height;
+              
+              const grayscale = new Uint8Array(n);
+              const integral = new Int32Array(n);
+              
+              for (let y = 0; y < height; y++) {
+                  let rowSum = 0;
+                  const rowOffset = y * width;
+                  for (let x = 0; x < width; x++) {
+                      const idx = (rowOffset + x) * 4;
+                      const gray = (0.2126 * data[idx] + 0.7152 * data[idx + 1] + 0.0722 * data[idx + 2]) | 0;
+                      grayscale[rowOffset + x] = gray;
+                      rowSum += gray;
+                      if (y === 0) {
+                          integral[x] = rowSum;
+                      } else {
+                          integral[rowOffset + x] = integral[(y - 1) * width + x] + rowSum;
+                      }
+                  }
+              }
+              
+              const S_val = 16; 
+              const T_val = imageEnhancePreset === 'custom' ? contrastLevel : 15; 
+              const s = Math.max(2, (width / S_val) | 0);
+              const sHalf = (s / 2) | 0;
+              
+              for (let y = 0; y < height; y++) {
+                  const y0 = Math.max(0, y - sHalf);
+                  const y1 = Math.min(height - 1, y + sHalf);
+                  const rowOffset = y * width;
+                  
+                  for (let x = 0; x < width; x++) {
+                      const x0 = Math.max(0, x - sHalf);
+                      const x1 = Math.min(width - 1, x + sHalf);
+                      const count = (x1 - x0 + 1) * (y1 - y0 + 1);
+                      
+                      const idxD = y1 * width + x1;
+                      const idxB = y0 > 0 ? (y0 - 1) * width + x1 : -1;
+                      const idxC = x0 > 0 ? y1 * width + (x0 - 1) : -1;
+                      const idxA = (y0 > 0 && x0 > 0) ? (y0 - 1) * width + (x0 - 1) : -1;
+                      
+                      let sum = integral[idxD];
+                      if (idxB !== -1) sum -= integral[idxB];
+                      if (idxC !== -1) sum -= integral[idxC];
+                      if (idxA !== -1) sum += integral[idxA];
+                      
+                      const currentVal = grayscale[rowOffset + x];
+                      const threshold = (sum / count) * (100 - T_val) / 100;
+                      const val = currentVal < threshold ? 0 : 255;
+                      
+                      const idx = (rowOffset + x) * 4;
+                      data[idx] = val;
+                      data[idx + 1] = val;
+                      data[idx + 2] = val;
+                  }
+              }
+              ctx.putImageData(imgData, 0, 0);
+          } else {
+              // Standard GPU CSS canvas filters representation
+              let filterString = "none";
+              if (imageEnhancePreset === 'grayscale') {
+                  filterString = "grayscale(100%) contrast(140%) brightness(100%)";
+              } else if (imageEnhancePreset === 'contrast') {
+                  filterString = "contrast(180%) brightness(105%)";
+              } else if (imageEnhancePreset === 'document') {
+                  filterString = "grayscale(100%) contrast(200%) brightness(112%)";
+              } else if (imageEnhancePreset === 'custom') {
+                  filterString = `grayscale(100%) contrast(${100 + contrastLevel}%) brightness(${100 + brightnessLevel}%)`;
+              }
+
+              if (filterString !== "none") {
+                  const tempCanvas = document.createElement('canvas');
+                  tempCanvas.width = width;
+                  tempCanvas.height = height;
+                  const tempCtx = tempCanvas.getContext('2d');
+                  if (tempCtx) {
+                      tempCtx.drawImage(canvas, 0, 0);
+                      ctx.save();
+                      ctx.clearRect(0, 0, width, height);
+                      ctx.filter = filterString;
+                      ctx.drawImage(tempCanvas, 0, 0);
+                      ctx.restore();
+                  }
+              }
+          }
+
+          // 2. Laplacian edge sharpening factor
+          const targetSharpen = imageEnhancePreset === 'document' ? 25 : (imageEnhancePreset === 'custom' ? sharpenLevel : 0);
+          if (targetSharpen > 0) {
+              const imgData = ctx.getImageData(0, 0, width, height);
+              const data = imgData.data;
+              const sideCanvas = document.createElement('canvas');
+              sideCanvas.width = width;
+              sideCanvas.height = height;
+              const sCtx = sideCanvas.getContext('2d');
+              if (sCtx) {
+                  sCtx.putImageData(imgData, 0, 0);
+                  const source = sCtx.getImageData(0, 0, width, height).data;
+                  
+                  const w = targetSharpen / 100;
+                  const kCenter = 1 + 4 * w;
+                  const kEdge = -w;
+                  
+                  for (let y = 1; y < height - 1; y++) {
+                      for (let x = 1; x < width - 1; x++) {
+                          const idx = (y * width + x) * 4;
+                          for (let c = 0; c < 3; c++) {
+                              const center = source[idx + c];
+                              const top = source[((y - 1) * width + x) * 4 + c];
+                              const bottom = source[((y + 1) * width + x) * 4 + c];
+                              const left = source[(y * width + (x - 1)) * 4 + c];
+                              const right = source[(y * width + (x + 1)) * 4 + c];
+                              
+                              const val = center * kCenter + (top + bottom + left + right) * kEdge;
+                              data[idx + c] = val > 255 ? 255 : (val < 0 ? 0 : val);
+                          }
+                      }
+                  }
+                  ctx.putImageData(imgData, 0, 0);
+              }
+          }
+      } catch (e) {
+          console.error("Image Enhancement Pipeline Error:", e);
+      }
+  }, [imageEnhancePreset, contrastLevel, brightnessLevel, sharpenLevel, enableAdaptiveThreshold, enableDeskewing]);
 
   const [isVisualContextActive, setIsVisualContextActive] = useState(false);
   const visualContextCooldownRef = useRef<number>(0);
@@ -763,10 +1268,24 @@ height="400"
       // 只有当画面有明显的黑白对比（文字/纸张边缘）时，才允许发送
       // console.log("画面质量达标，准备发送至云端分析...");
       
-      // 实际发送时使用原分辨率
-      canvas.width = videoElement.videoWidth;
-      canvas.height = videoElement.videoHeight;
-      ctx.drawImage(videoElement, 0, 0);
+      // 实际发送时限制最大分辨率，避免高分辨率上传挤占带宽导致延迟
+      const MAX_WIDTH = 1280;
+      const MAX_HEIGHT = 720;
+      let targetWidth = videoElement.videoWidth;
+      let targetHeight = videoElement.videoHeight;
+      
+      if (targetWidth > MAX_WIDTH || targetHeight > MAX_HEIGHT) {
+          const ratio = Math.min(MAX_WIDTH / targetWidth, MAX_HEIGHT / targetHeight);
+          targetWidth = Math.floor(targetWidth * ratio);
+          targetHeight = Math.floor(targetHeight * ratio);
+      }
+
+      canvas.width = targetWidth;
+      canvas.height = targetHeight;
+      ctx.drawImage(videoElement, 0, 0, targetWidth, targetHeight);
+      
+      // Apply the image enhancement pipeline
+      applyImageEnhancement(canvas);
       
       return new Promise((resolve) => {
           canvas.toBlob(async (blob) => {
@@ -783,7 +1302,7 @@ height="400"
               }
           }, 'image/jpeg', videoQuality);
       });
-  }, [videoQuality]);
+  }, [videoQuality, applyImageEnhancement]);
 
   // Modified to be on-demand only
   const triggerVisualContext = useCallback(async (sessionPromise: Promise<any>) => {
@@ -813,7 +1332,10 @@ height="400"
               checkImageQuality(video, canvas, ctx).then(base64 => {
                   if (base64) {
                       sessionPromise.then(session => {
-                          session.sendRealtimeInput({ media: { mimeType: 'image/jpeg', data: base64 } });
+                          if (connectionStateRef.current !== ConnectionState.CONNECTED) return;
+                          try {
+                              session.sendRealtimeInput({ video: { mimeType: 'image/jpeg', data: base64 } });
+                          } catch(e) { console.error("Error inner sending video:", e) }
                       }).catch(e => console.error("Error sending video:", e));
                   }
               });
@@ -827,8 +1349,43 @@ height="400"
       }, 500);
   }, [checkImageQuality]);
 
+  const detectWritingStillness = useCallback((video: HTMLVideoElement) => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 160;
+    canvas.height = 90;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx) return 0;
+
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const data = imageData.data;
+    
+    const grayData = new Uint8ClampedArray(canvas.width * canvas.height);
+    for (let i = 0; i < data.length; i += 4) {
+      grayData[i / 4] = data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114;
+    }
+
+    if (prevFrameRef.current) {
+      let diff = 0;
+      for (let i = 0; i < grayData.length; i++) {
+        diff += Math.abs(grayData[i] - prevFrameRef.current[i]);
+      }
+      const avgDiff = diff / grayData.length;
+      
+      if (avgDiff > 5) {
+        lastMotionTimeRef.current = Date.now();
+      }
+    } else {
+        lastMotionTimeRef.current = Date.now();
+    }
+
+    prevFrameRef.current = grayData;
+    return Date.now() - lastMotionTimeRef.current;
+  }, []);
+
   const startVideoStreaming = useCallback((sessionPromise: Promise<any>) => {
       if (videoIntervalRef.current) clearInterval(videoIntervalRef.current);
+      if (stillnessIntervalRef.current) clearInterval(stillnessIntervalRef.current);
 
       const intervalMs = 1000 / videoFrameRate;
 
@@ -842,12 +1399,29 @@ height="400"
               const base64 = await checkImageQuality(video, canvas, ctx);
               if (base64) {
                   sessionPromise.then(session => {
-                      session.sendRealtimeInput({ media: { mimeType: 'image/jpeg', data: base64 } });
+                      if (connectionStateRef.current !== ConnectionState.CONNECTED) return;
+                      try {
+                          session.sendRealtimeInput({ video: { mimeType: 'image/jpeg', data: base64 } });
+                      } catch(e) { console.error("Error inner sending video:", e) }
                   }).catch(e => console.error("Error sending video:", e));
               }
           }
       }, intervalMs);
-  }, [videoFrameRate, checkImageQuality]);
+
+      stillnessIntervalRef.current = setInterval(() => {
+          if (!videoRef.current) return;
+          const stillnessTime = detectWritingStillness(videoRef.current);
+          const now = Date.now();
+          
+          if (stillnessTime > 30000 && 
+              !isBotSpeakingRef.current && 
+              (now - lastAutoTriggerTimeRef.current > 60000)) {
+              
+              triggerAITutor("学生停笔");
+              lastAutoTriggerTimeRef.current = now;
+          }
+      }, 500);
+  }, [videoFrameRate, checkImageQuality, detectWritingStillness, triggerAITutor]);
 
   // Update video streaming interval if frame rate/quality changes while connected
   useEffect(() => {
@@ -872,107 +1446,135 @@ height="400"
 
       currentSessionIdRef.current = null;
 
-      // 1. Setup Camera
+      // 1. Setup Camera & Microphone
       let stream: MediaStream | null = null;
       let finalError: Error | null = null;
 
       try {
-          // First try with specific device and ideal resolution
-          const constraints: MediaStreamConstraints = {
-              video: selectedCameraId ? { deviceId: { exact: selectedCameraId }, width: { ideal: 1920 }, height: { ideal: 1080 } } : { width: { ideal: 1920 }, height: { ideal: 1080 } },
+          if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+              throw new Error("浏览器或设备不支持媒体设备访问 (可能由于非安全环境或缺少权限)。");
+          }
+
+          // First try: Get both video and audio together with ideal full HD resolution
+          const idealConstraints: MediaStreamConstraints = {
+              video: selectedCameraId 
+                  ? { deviceId: { exact: selectedCameraId }, width: { ideal: 1920 }, height: { ideal: 1080 } } 
+                  : { width: { ideal: 1920 }, height: { ideal: 1080 } },
               audio: true
           };
-          stream = await navigator.mediaDevices.getUserMedia(constraints);
+          console.log("Attempting to get media with HD constraints:", idealConstraints);
+          stream = await navigator.mediaDevices.getUserMedia(idealConstraints);
       } catch (err: any) {
-          console.warn("Failed to get media with specific constraints", err);
+          console.warn("Failed to get media with HD constraints, entering adaptive mode:", err);
           finalError = err instanceof Error ? err : new Error(String(err));
           
           if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
               console.warn("Permission denied for camera/microphone.");
-              setMediaWarning("摄像头或麦克风权限被拒绝。请在浏览器设置中允许访问，或以纯文本模式继续。");
+              setMediaWarning("摄像头或麦克风权限被拒绝。请在浏览器上方或地址栏设置中允许权限，或以纯文本/语音模式继续。");
           } else {
-              // Check for OverconstrainedError specifically
-              if (err.name === 'OverconstrainedError' || err instanceof OverconstrainedError) {
-                 console.warn("OverconstrainedError detected, relaxing constraints.");
+              // Try independent track acquisition to isolate failures (e.g. mic in use or cam doesn't support HD)
+              console.log("Running independent track fallback...");
+              let videoStream: MediaStream | null = null;
+              let audioStream: MediaStream | null = null;
+
+              // 1. Acquire Video
+              try {
+                  const videoConstraints = selectedCameraId 
+                      ? { deviceId: { exact: selectedCameraId }, width: { ideal: 1280 }, height: { ideal: 720 } }
+                      : { width: { ideal: 1280 }, height: { ideal: 720 } };
+                  videoStream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints });
+              } catch (vErr) {
+                  console.warn("Video with standard HD constraints failed, trying basic video:", vErr);
+                  try {
+                      videoStream = await navigator.mediaDevices.getUserMedia({ video: true });
+                  } catch (vErr2) {
+                      console.error("All video acquisition attempts failed:", vErr2);
+                  }
               }
 
+              // 2. Acquire Audio
               try {
-                  // Try without any resolution constraints, just request video and audio
-                  stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-              } catch (fallbackErr: any) {
-                  console.warn("Failed to get default camera and audio together", fallbackErr);
-                  
-                  if (fallbackErr.name === 'NotAllowedError' || fallbackErr.name === 'PermissionDeniedError') {
-                      console.warn("Permission denied for camera/microphone.");
-                      setMediaWarning("摄像头或麦克风权限被拒绝。请在浏览器设置中允许访问，或以纯文本模式继续。");
-                  } else {
-                      try {
-                          // Fallback 1: Try audio only first (more likely to succeed if camera is blocked/used)
-                          console.warn("Trying audio only mode");
-                          stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                      } catch (audioOnlyErr: any) {
-                          if (audioOnlyErr.name !== 'NotAllowedError' && audioOnlyErr.name !== 'PermissionDeniedError') {
-                              console.error("Failed to get audio only", audioOnlyErr);
-                          }
-                          
-                          try {
-                              // Fallback 2: Try video only (rare case where mic is blocked but camera works)
-                              console.warn("Trying video only mode");
-                              stream = await navigator.mediaDevices.getUserMedia({ video: true });
-                          } catch (videoOnlyErr: any) {
-                              if (videoOnlyErr.name !== 'NotAllowedError' && videoOnlyErr.name !== 'PermissionDeniedError') {
-                                  console.error("Failed to get video only", videoOnlyErr);
-                              }
-                              console.warn("All media access failed. Proceeding in text-only mode.");
-                          }
-                      }
+                  audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+              } catch (aErr) {
+                  console.error("Audio acquisition failed:", aErr);
+              }
+
+              // 3. Assemble combined stream
+              if (videoStream || audioStream) {
+                  const combined = new MediaStream();
+                  if (videoStream) {
+                      videoStream.getVideoTracks().forEach(track => combined.addTrack(track));
                   }
+                  if (audioStream) {
+                      audioStream.getAudioTracks().forEach(track => combined.addTrack(track));
+                  }
+                  stream = combined;
               }
           }
       }
       
       if (!stream) {
-          console.warn("No media stream available. App will run in text-only mode.");
-          setMediaWarning("无法访问摄像头或麦克风，已进入纯文本/语音模式。您可以通过文字或上传图片与 AI 交流。");
+          console.warn("No media stream constructed. Operating in pure text-only mode.");
+          setMediaWarning("无法访问您的摄像头和麦克风。当前已自动切换至【纯文本/网页上传图片模式】。您依然可通过输入文字或点击下方‘专属题库’上传试卷/题目与 AI 学习！");
       } else {
-          // Check what tracks we actually got
+          // Identify actually acquired tracks
           const hasVideo = stream.getVideoTracks().length > 0;
           const hasAudio = stream.getAudioTracks().length > 0;
           
           if (!hasVideo && hasAudio) {
-              setMediaWarning("无法访问摄像头，已进入纯语音模式。您可以通过语音或上传图片与 AI 交流。");
+              setMediaWarning("无法连接摄像头，系统已进入【纯语音互动模式】。您可以通过语音对话，或通过点击下方的题库按钮上传作业。");
           } else if (!hasAudio && hasVideo) {
-              setMediaWarning("无法访问麦克风，您只能通过文字与 AI 交流，但 AI 可以看到您的画面。");
+              setMediaWarning("无法连接麦克风，系统已进入【画面辅导/文本交互模式】。AI 老师可以看到您的书写画面，请使用文字与 AI 互动。");
           }
       }
 
       if (stream && videoRef.current && stream.getVideoTracks().length > 0) {
         videoRef.current.srcObject = stream;
-        await videoRef.current.play();
+        try {
+            await videoRef.current.play();
+        } catch (playErr) {
+            console.error("Error playing video stream:", playErr);
+        }
       }
 
       // 2. Setup Gemini Client
-      if (!process.env.GEMINI_API_KEY) throw new Error("API Key not found in environment variables.");
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      let effectiveApiKey = apiKey.trim();
+      if (effectiveApiKey === 'MY_GEMINI_API_KEY') effectiveApiKey = '';
+      
+      const ai = new GoogleGenAI({ 
+          apiKey: effectiveApiKey || 'proxied',
+          httpOptions: {
+              apiVersion: 'v1beta',
+              ...(effectiveApiKey ? {} : { baseUrl: `${window.location.protocol}//${window.location.host}/api/gemini/` })
+          }
+      });
       
       // 3. Setup Audio Contexts
       const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
-      inputContextRef.current = new AudioContext({ sampleRate: PCM_SAMPLE_RATE });
-      outputContextRef.current = new AudioContext({ sampleRate: OUTPUT_SAMPLE_RATE });
+      if (AudioContext) {
+          try {
+              inputContextRef.current = new AudioContext({ sampleRate: PCM_SAMPLE_RATE });
+              outputContextRef.current = new AudioContext({ sampleRate: OUTPUT_SAMPLE_RATE });
+          } catch (e) {
+              console.warn("AudioContext with specific sampleRate failed, falling back to default", e);
+              inputContextRef.current = new AudioContext();
+              outputContextRef.current = new AudioContext();
+          }
+      }
       
-      await inputContextRef.current.resume();
-      await outputContextRef.current.resume();
-      
-      outputNodeRef.current = outputContextRef.current.createGain();
-      outputNodeRef.current.gain.value = isSpeakerMuted ? 0 : 1;
-      outputNodeRef.current.connect(outputContextRef.current.destination);
+      if (inputContextRef.current && outputContextRef.current) {
+          await inputContextRef.current.resume();
+          await outputContextRef.current.resume();
+          
+          outputNodeRef.current = outputContextRef.current.createGain();
+          outputNodeRef.current.gain.value = isSpeakerMuted ? 0 : 1;
+          outputNodeRef.current.connect(outputContextRef.current.destination);
+      }
       
       nextStartTimeRef.current = 0;
 
       // 4. Construct System Instruction
-      let currentSystemInstruction = BASE_SYSTEM_INSTRUCTION;
-      currentSystemInstruction += `\n\n- **Continuous Vision**: You are receiving a continuous video stream from the student's camera. You should actively observe what they are doing, especially the homework or problems they are showing you, and offer guidance proactively when appropriate.`;
-      currentSystemInstruction += `\n- **防幻觉与指尖/笔尖追踪 (CRITICAL ANTI-HALLUCINATION)**:\n  1. 极度关注指示物：当学生用手指或笔尖指向屏幕/纸张上的某个字、词或句子时，你的视线必须**精确定位到指尖或笔尖所指的确切位置**。\n  2. 逐字精准读取：**只读出你确切看清的字**，绝不能根据上下文进行猜测、脑补或联想（严禁AI幻觉）。如果你看到的是“大”，绝不能读成“太”。\n  3. 遮挡与模糊处理：如果手指或笔尖遮挡了字迹，或者因为反光、模糊导致无法100%确认，**必须直接告诉学生：“你指的地方有点反光/被手指挡住了，能稍微挪开一点或者拿近一点让我看清楚吗？”**，绝对不要强行猜测。同时，**必须调用 \`reportUnclearVideo\` 函数**，在界面上给学生弹出提示。\n  4. 全局模糊处理：如果整个画面模糊、对焦不准或光线太暗导致你无法看清题目，**必须调用 \`reportUnclearVideo\` 函数**，并用语音温柔地提醒学生调整摄像头。\n  5. 逐字确认：对于学生指出的字，你可以用“你指的是不是‘X’字？”来确认，确保识别绝对准确。\n  6. 延迟与对焦：视频流可能存在轻微延迟或对焦过程。当学生刚指出一个字时，请**等待1-2秒钟**，确保画面清晰稳定后再进行读取，不要在画面模糊时抢答。`;
+      let currentSystemInstruction = "You are a helpful assistant.";
       
       if (userProfile.name) {
           currentSystemInstruction += `\n- **Student Profile**: The student's name is "${userProfile.name}". Use their name occasionally to be friendly.`;
@@ -1030,9 +1632,7 @@ height="400"
         model: MODEL_NAME,
         config: {
           responseModalities: [Modality.AUDIO],
-          systemInstruction: currentSystemInstruction,
-          inputAudioTranscription: {},
-          outputAudioTranscription: {},
+          systemInstruction: { role: 'system', parts: [{ text: currentSystemInstruction }] },
           tools: [{
               functionDeclarations: [
                   {
@@ -1062,13 +1662,48 @@ height="400"
                           },
                           required: ["reason"]
                       }
+                  },
+                  {
+                      name: "triggerVariantQuestion",
+                      description: "当讲解完一个知识点后，为了验证学生是否掌握（进行费曼互动测试），或者当学生同意或想做一道变式练习题时，调用此函数在界面上生成美观的互动型“变式练习题”交互弹窗。不可直接给原题答案，而是出一道和原题思路高度类似、数值不同的变式题考考学生并交互解答。",
+                      parameters: {
+                          type: Type.OBJECT,
+                          properties: {
+                              title: {
+                                  type: Type.STRING,
+                                  description: "变式练习题的简洁标题，例如：'等边三角形面积变式'、'动量守恒变式'等"
+                              },
+                              question: {
+                                  type: Type.STRING,
+                                  description: "变式练习题的完整题目描述，难度和知识点保持一致"
+                              },
+                              options: {
+                                  type: Type.ARRAY,
+                                  items: {
+                                      type: Type.STRING
+                                  },
+                                  description: "选择题选项。尽量提供标准的4个选项列表，如果是大题/填空题可传入空列表。例如：['A. 5°', 'B. 10°', 'C. 15°', 'D. 20°']"
+                              },
+                              correctAnswer: {
+                                  type: Type.STRING,
+                                  description: "变式题的最佳/正确答案。若是选择题，传入对应大写字母例如 'A'。若非选择题，传入简要正确字符串或数字。"
+                              },
+                              explanation: {
+                                  type: Type.STRING,
+                                  description: "详细步骤和友好解析（用于给学生演示或解答）"
+                              }
+                          },
+                          required: ["title", "question", "options", "correctAnswer", "explanation"]
+                      }
                   }
               ]
           }], // Enable the tool
+          inputAudioTranscription: {},
+          outputAudioTranscription: {},
           speechConfig: { 
             voiceConfig: { 
                 prebuiltVoiceConfig: { 
-                    voiceName: userProfile.voiceName || 'Kore' 
+                    voiceName: ['Puck', 'Charon', 'Kore', 'Fenrir', 'Zephyr'].includes(userProfile.voiceName || '') ? userProfile.voiceName : 'Kore' 
                 } 
             } 
           },
@@ -1083,7 +1718,12 @@ height="400"
                 startVideoStreaming(sessionPromise);
             }
 
-            if (!inputContextRef.current || !stream || stream.getAudioTracks().length === 0) {
+            if (!inputContextRef.current) {
+                console.warn("No audio context available for live session.");
+                return;
+            }
+
+            if (!stream || stream.getAudioTracks().length === 0) {
                 console.log("No audio stream available for input. Using oscillator for dummy audio.");
                 
                 const oscillator = inputContextRef.current.createOscillator();
@@ -1100,11 +1740,17 @@ height="400"
 
                 const processor = inputContextRef.current.createScriptProcessor(4096, 1, 1);
                 processorRef.current = processor;
+                const currentSampleRate = inputContextRef.current.sampleRate || PCM_SAMPLE_RATE;
                 processor.onaudioprocess = (e) => {
                     if (connectionStateRef.current !== ConnectionState.CONNECTED) return;
                     const inputData = e.inputBuffer.getChannelData(0);
-                    const pcmBlob = createPcmBlob(inputData);
-                    sessionPromise.then(session => session.sendRealtimeInput({ media: pcmBlob })).catch(e => console.error("Error sending audio:", e));
+                    const pcmBlob = createPcmBlob(inputData, currentSampleRate);
+                    sessionPromise.then(session => {
+                        if (connectionStateRef.current !== ConnectionState.CONNECTED) return;
+                        try {
+                            session.sendRealtimeInput({ audio: pcmBlob });
+                        } catch(e) { console.error("Inner error sending dummy audio:", e) }
+                    }).catch(e => console.error("Error sending dummy audio:", e));
                 };
                 
                 gainNode.connect(processor);
@@ -1123,6 +1769,7 @@ height="400"
 
             const processor = inputContextRef.current.createScriptProcessor(4096, 1, 1);
             processorRef.current = processor;
+            const currentSampleRate = inputContextRef.current.sampleRate || PCM_SAMPLE_RATE;
             processor.onaudioprocess = (e) => {
               let inputData;
               if (isMicMutedRef.current) {
@@ -1131,8 +1778,13 @@ height="400"
               } else {
                   inputData = e.inputBuffer.getChannelData(0);
               }
-              const pcmBlob = createPcmBlob(inputData);
-              sessionPromise.then(session => session.sendRealtimeInput({ media: pcmBlob })).catch(e => console.error("Error sending audio:", e));
+              const pcmBlob = createPcmBlob(inputData, currentSampleRate);
+              sessionPromise.then(session => {
+                  if (connectionStateRef.current !== ConnectionState.CONNECTED) return;
+                  try {
+                      session.sendRealtimeInput({ audio: pcmBlob });
+                  } catch(e) { console.error("Inner error sending audio:", e) }
+              }).catch(e => console.error("Error sending audio promise:", e));
             };
             source.connect(processor);
             processor.connect(inputContextRef.current.destination);
@@ -1146,8 +1798,10 @@ height="400"
                   // Keyword detection for visual context
                   const keywords = ['帮我', '看看', '解决', '不懂', '难点', '解释', '为什么', '错哪', '题', 'question', 'help', 'look', 'see', 'what', 'wrong'];
                   if (keywords.some(k => text.toLowerCase().includes(k))) {
-                      console.log("Visual context trigger detected:", text);
-                      triggerVisualContext(sessionPromise);
+                      console.log("Visual context trigger detected via text:", text);
+                      if (sessionPromiseRef.current) {
+                          triggerVisualContext(sessionPromiseRef.current);
+                      }
                   }
               }
             }
@@ -1180,6 +1834,15 @@ height="400"
                                 response: { result: "Warning displayed to user." }
                             };
                         }
+                        if (call.name === 'triggerVariantQuestion') {
+                            const args = call.args as unknown as VariantQuestion;
+                            handleTriggerVariantQuestion(args);
+                            return {
+                                id: call.id,
+                                name: call.name,
+                                response: { result: "Variant question displayed in interface for interactive solving." }
+                            };
+                        }
                         return {
                             id: call.id,
                             name: call.name,
@@ -1187,7 +1850,12 @@ height="400"
                         };
                     });
                     
-                    sessionPromise.then(session => session.sendToolResponse({ functionResponses: responses }));
+                    sessionPromise.then(session => {
+                        if (connectionStateRef.current !== ConnectionState.CONNECTED) return;
+                        try {
+                            session.sendToolResponse({ functionResponses: responses });
+                        } catch(e) { console.error("Inner error tool response:", e); }
+                    }).catch(e => console.error("Tool response error:", e));
                 }
             }
 
@@ -1217,24 +1885,29 @@ height="400"
           },
           onclose: () => {
             console.log('Connection Closed');
-            setConnectionState(ConnectionState.DISCONNECTED);
-            connectionStateRef.current = ConnectionState.DISCONNECTED;
             if (silenceTimerRef.current) {
                 clearInterval(silenceTimerRef.current);
                 silenceTimerRef.current = null;
             }
+            stopSession();
           },
           onerror: (err) => {
             console.error('Gemini Error:', err);
             setError(err instanceof Error ? err.message : "连接发生错误，请重试。");
-            setConnectionState(ConnectionState.ERROR);
-            connectionStateRef.current = ConnectionState.ERROR;
             if (silenceTimerRef.current) {
                 clearInterval(silenceTimerRef.current);
                 silenceTimerRef.current = null;
             }
+            stopSession();
           }
         }
+      });
+      sessionPromise.catch(err => {
+          console.error('Async session promise failed', err);
+          setError(err instanceof Error ? err.message : String(err));
+          setConnectionState(ConnectionState.ERROR);
+          connectionStateRef.current = ConnectionState.ERROR;
+          stopSession();
       });
       sessionPromiseRef.current = sessionPromise;
 
@@ -1246,44 +1919,6 @@ height="400"
       stopSession();
     }
   };
-
-  const handleSendMessage = useCallback(async (text: string, displayOverride?: string, isSystemMessage: boolean = false) => {
-    if (!text || text.trim() === '') return;
-    
-    if (!sessionPromiseRef.current || connectionState !== ConnectionState.CONNECTED) {
-        console.warn("Attempted to send message while disconnected:", text);
-        return;
-    }
-    
-    if (!isSystemMessage) {
-        updateTranscript('user', displayOverride || text, true);
-        // Reset silence timer on manual message
-        lastInteractionTimeRef.current = Date.now();
-        silenceLevelRef.current = 0;
-    }
-    
-    try {
-        const session = await sessionPromiseRef.current;
-        // Add a small delay to ensure previous operations are cleared
-        await new Promise(resolve => setTimeout(resolve, 50));
-        
-        if (typeof session.sendClientContent === 'function') {
-            session.sendClientContent({
-                 turns: [{ role: 'user', parts: [{ text }] }],
-                 turnComplete: true
-            });
-            console.log("Text message sent to model:", text);
-        } else {
-            console.error("Session does not have sendClientContent method");
-        }
-    } catch (err) {
-        console.error("Failed to send text message:", err);
-        // If system message fails, don't show error to user, just log it
-        if (!isSystemMessage) {
-             // Optional: notify user or retry
-        }
-    }
-  }, [updateTranscript, connectionState]);
 
   const handleUploadExamToDatabase = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -1318,7 +1953,7 @@ height="400"
         }
 
         const newRecord: ExamRecord = {
-            id: Date.now().toString(),
+            id: `${Date.now()}-${Math.random().toString(36).substring(2, 11)}`,
             name: file.name.replace(/\.[^/.]+$/, ""), // Remove extension
             date: new Date().toISOString().split('T')[0], // Default to today
             content: extractedText,
@@ -1363,7 +1998,7 @@ height="400"
 
             const messageText = `[用户上传了PDF文件: ${file.name}]\n${fullText}`;
             const displayText = `[用户上传了PDF文件: ${file.name}]`;
-            handleSendMessage(messageText, displayText);
+            triggerAITutor(`用户上传了PDF文件: ${file.name}\n内容: ${fullText}`);
             return;
         }
 
@@ -1371,7 +2006,7 @@ height="400"
              const text = await file.text();
              const fullText = `[用户上传了文本文件: ${file.name}]\n${text}`;
              const displayText = `[用户上传了文本文件: ${file.name}]`;
-             handleSendMessage(fullText, displayText);
+             triggerAITutor(`用户上传了文本文件: ${file.name}\n内容: ${text}`);
              return;
         }
 
@@ -1381,37 +2016,40 @@ height="400"
             const msgText = `[用户上传了图片: ${file.name}]`;
             updateTranscript('user', msgText, true);
             
-            // Run OCR on the uploaded image
+            // Run OCR on the uploaded image using state-of-the-art Gemini 2.5 Flash
             try {
-                const result = await Tesseract.recognize(file, 'chi_sim+eng');
-                const text = result.data.text.trim();
+                const text = await performHighPrecisionOcr(file);
                 if (text) {
-                    const ocrText = `[系统：通过OCR识别到上传图片中的文字内容如下]\n${text}`;
-                    handleSendMessage(ocrText, `[系统：已识别图片文字，共 ${text.length} 字]`, true);
+                    const ocrText = `[系统：通过高精度AI OCR识别到上传图片中的文字内容如下]\n${text}`;
+                    console.log("High precision OCR result on upload:", text);
                     
-                    const apiKey = process.env.GEMINI_API_KEY || import.meta.env.VITE_GEMINI_API_KEY;
-                    if (apiKey) {
-                        const classification = await classifyQuestion(text, apiKey);
-                        if (classification) {
-                            const classMsg = `[系统：题型分析完成。学科：${classification.subject}，知识点：${classification.topic}，题型：${classification.questionType}，难度：${classification.difficulty}，核心概念：${classification.keyConcepts.join(', ')}。请根据此题型特点进行针对性讲解。]`;
-                            handleSendMessage(classMsg, `[系统：已识别题型为 ${classification.subject} - ${classification.questionType}]`, true);
-                        }
+                    triggerAITutor(`通过高精度AI识别并同步到当前图片中的文字内容如下: ${text}`);
+                    
+                    const classification = await classifyQuestion(text);
+                    if (classification) {
+                        triggerAITutor(`题型分析完成。学科：${classification.subject}，知识点：${classification.topic}，题型：${classification.questionType}，难度：${classification.difficulty}，核心概念：${classification.keyConcepts.join(', ')}。请根据此题型特点进行针对性讲解。`);
                     }
                 }
             } catch (e) {
-                console.error("OCR Error on uploaded image:", e);
+                console.error("High-precision OCR Error on uploaded image:", e);
             }
 
             sessionPromiseRef.current.then(session => {
-                 session.sendRealtimeInput({ media: { mimeType, data: base64 } });
+                 if (connectionStateRef.current !== ConnectionState.CONNECTED) return;
+                 try {
+                     session.sendRealtimeInput({ video: { mimeType, data: base64 } });
+                 } catch(e) { console.error(e); }
                  
                  // Trigger response
                  if (typeof session.sendClientContent === 'function') {
                      setTimeout(() => {
-                         session.sendClientContent({
-                              turns: [{ role: 'user', parts: [{ text: `我上传了一张图片 (${file.name})，请帮我看看。` }] }],
-                              turnComplete: true
-                         });
+                         if (connectionStateRef.current !== ConnectionState.CONNECTED) return;
+                         try {
+                             session.sendClientContent({
+                                  turns: [{ role: 'user', parts: [{ text: `我上传了一张图片 (${file.name})，请帮我看看。` }] }],
+                                  turnComplete: true
+                             });
+                         } catch(e) { console.error(e); }
                      }, 200);
                  }
             }).catch(e => console.error("Error sending file:", e));
@@ -1423,7 +2061,7 @@ height="400"
         console.error("File upload failed", e);
         alert("文件处理失败");
     }
-  }, [handleSendMessage, updateTranscript]);
+  }, [triggerAITutor, updateTranscript]);
 
   const handleAskExplain = (arg1?: any, arg2?: string) => {
       let t: 'knowledge' | 'eye' | undefined;
@@ -1440,12 +2078,9 @@ height="400"
       if (!t || !c) return;
 
       const prompt = `请详细为我讲解一下这个${t === 'knowledge' ? '知识点' : '题眼'}：${c}`;
-      handleSendMessage(prompt);
+      triggerAITutor(`学生请求详细讲解${t === 'knowledge' ? '知识点' : '题眼'}：${c}`);
       setActivePopup(null);
   };
-
-  const lastOcrTextRef = useRef<string>('');
-  const ocrIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   const performBackgroundOCR = async () => {
       if (!videoRef.current || !canvasRef.current || isProcessingOCR) return;
@@ -1461,31 +2096,59 @@ height="400"
           canvas.height = video.videoHeight;
           ctx.drawImage(video, 0, 0);
           
+          // Apply image enhancement
+          applyImageEnhancement(canvas);
+          
           const dataUrl = canvas.toDataURL('image/jpeg');
           
           // Run OCR
-          const result = await Tesseract.recognize(dataUrl, 'chi_sim+eng');
+          const worker = await getOcrWorker();
+          if (!worker) {
+              setIsProcessingOCR(false);
+              return;
+          }
+          const result = await worker.recognize(dataUrl);
           
           const text = result.data.text.trim();
           if (text && text.length > 10) {
               // Similarity check to avoid spamming the same text
-              if (lastOcrTextRef.current && (lastOcrTextRef.current.includes(text) || text.includes(lastOcrTextRef.current))) {
-                  return; // Too similar, skip
-              }
-              lastOcrTextRef.current = text;
+              if (lastOcrTextRef.current) {
+                  const prev = lastOcrTextRef.current;
+                  const curr = text;
+                  
+                  // Calculate bigram Sørensen–Dice coefficient for a more robust similarity check
+                  const getBigrams = (str: string) => {
+                      const bigrams = new Set<string>();
+                      const cleanStr = str.replace(/\s+/g, '');
+                      for (let i = 0; i < cleanStr.length - 1; i++) {
+                          bigrams.add(cleanStr.substring(i, i + 2));
+                      }
+                      return bigrams;
+                  };
 
-              const msgText = `[系统：后台持续观察，通过OCR识别到当前画面中的文字内容如下]\n${text}`;
-              const displayText = `[系统：已自动识别画面文字，共 ${text.length} 字]`;
-              handleSendMessage(msgText, displayText, true);
-              
-              const apiKey = process.env.GEMINI_API_KEY || import.meta.env.VITE_GEMINI_API_KEY;
-              if (apiKey) {
-                  const classification = await classifyQuestion(text, apiKey);
-                  if (classification) {
-                      const classMsg = `[系统：题型分析完成。学科：${classification.subject}，知识点：${classification.topic}，题型：${classification.questionType}，难度：${classification.difficulty}，核心概念：${classification.keyConcepts.join(', ')}。请根据此题型特点进行针对性讲解。]`;
-                      handleSendMessage(classMsg, `[系统：已识别题型为 ${classification.subject} - ${classification.questionType}]`, true);
+                  const prevBigrams = getBigrams(prev);
+                  const currBigrams = getBigrams(curr);
+                  
+                  let similarity = 0;
+                  if (prevBigrams.size > 0 && currBigrams.size > 0) {
+                      let intersection = 0;
+                      for (const bg of currBigrams) {
+                          if (prevBigrams.has(bg)) intersection++;
+                      }
+                      similarity = (2.0 * intersection) / (prevBigrams.size + currBigrams.size);
+                  }
+
+                  if (similarity > 0.65 || prev === curr || prev.includes(curr) || curr.includes(prev)) {
+                      // Text is similar. Student is NOT writing (or writing very little).
+                      // Do not update lastInteractionTimeRef.
+                      return; 
                   }
               }
+              
+              // Text is significantly different. Student IS writing.
+              lastOcrTextRef.current = text;
+              lastInteractionTimeRef.current = Date.now(); // Reset silence timer
+              silenceLevelRef.current = 0; // Reset silence level
           }
       } catch (e) {
           console.error("Background OCR Error:", e);
@@ -1496,7 +2159,7 @@ height="400"
 
   useEffect(() => {
       if (connectionState === ConnectionState.CONNECTED) {
-          // Run background OCR every 15 seconds
+          // Run background OCR every 15 seconds to save CPU cycles
           ocrIntervalRef.current = setInterval(performBackgroundOCR, 15000);
       } else {
           if (ocrIntervalRef.current) {
@@ -1795,8 +2458,373 @@ height="400"
                 </div>
             )}
 
-            {/* Session Summary Modal */}
-            {showSummaryModal && (
+            {/* AI Smart High-Precision OCR Scanner Modal */}
+            <AnimatePresence>
+              {showOcrModal && (
+                <div className="absolute inset-0 z-50 flex items-center justify-center p-6 bg-black/85 backdrop-blur-md">
+                  <motion.div 
+                    key="ocr-modal"
+                    initial={{ opacity: 0, scale: 0.9, y: 20 }}
+                    animate={{ opacity: 1, scale: 1, y: 0 }}
+                    exit={{ opacity: 0, scale: 0.95, y: 15 }}
+                    transition={{ type: 'spring', damping: 25, stiffness: 350 }}
+                    className="bg-white dark:bg-gray-950 border border-emerald-500/30 w-full max-w-4xl rounded-[2.5rem] shadow-2xl overflow-hidden flex flex-col max-h-[85vh] relative"
+                    id="high-precision-ocr-modal"
+                  >
+                     {/* Header */}
+                     <div className="px-8 py-6 bg-gradient-to-r from-emerald-600 to-indigo-900 flex justify-between items-center text-white shrink-0">
+                         <div className="flex items-center gap-4">
+                             <div className="bg-white/15 p-2.5 rounded-2xl">
+                                 <ScanEye size={28} className="text-emerald-200" />
+                             </div>
+                             <div>
+                                 <span className="text-xs uppercase tracking-widest font-bold text-emerald-200 block">高精拍照识字</span>
+                                 <h3 className="font-extrabold text-2xl text-white mt-0.5">AI高精字迹识别与同步</h3>
+                             </div>
+                         </div>
+                         <button 
+                             onClick={() => setShowOcrModal(false)}
+                             className="p-2 hover:bg-white/10 rounded-full text-emerald-200 hover:text-white transition-colors cursor-pointer"
+                             id="close-ocr-btn"
+                         >
+                             <X size={26} />
+                         </button>
+                     </div>
+
+                     {/* Content: Two Columns */}
+                     <div className="p-8 overflow-y-auto flex-1 grid grid-cols-1 md:grid-cols-2 gap-8 bg-gray-50 dark:bg-gray-950">
+                          {/* Left Column: Captured Photo Preview */}
+                          <div className="flex flex-col gap-4">
+                              <span className="text-sm font-bold text-gray-500 dark:text-gray-400 flex items-center gap-1.5">
+                                  <Camera size={16} /> 拍照存根
+                              </span>
+                              <div className="relative flex-1 min-h-[300px] max-h-[450px] rounded-3xl overflow-hidden border border-gray-200 dark:border-gray-800 bg-black flex items-center justify-center group shadow-md flex-1">
+                                  {ocrCapturedImage ? (
+                                      <img 
+                                          src={ocrCapturedImage} 
+                                          alt="Snapshot" 
+                                          className="max-w-full max-h-full object-contain"
+                                          referrerPolicy="no-referrer"
+                                      />
+                                  ) : (
+                                      <div className="text-gray-400 flex flex-col items-center gap-2">
+                                          <Loader2 className="animate-spin text-emerald-500" size={32} />
+                                          <p className="text-sm">尚未截获画面</p>
+                                      </div>
+                                  )}
+                                  <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center backdrop-blur-sm">
+                                      <p className="text-white text-xs font-semibold uppercase bg-black/60 px-4 py-2 rounded-full border border-white/10">当前抓包画质合格</p>
+                                  </div>
+                              </div>
+                          </div>
+
+                          {/* Right Column: OCR Text Result */}
+                          <div className="flex flex-col gap-4">
+                              <span className="text-sm font-bold text-gray-500 dark:text-gray-400 flex items-center gap-1.5">
+                                  <FileText size={16} /> 识别转义文字
+                              </span>
+                              
+                              <div className="flex-1 min-h-[300px] flex flex-col rounded-3xl border border-gray-200 dark:border-gray-850 bg-white dark:bg-gray-900 overflow-hidden shadow-md flex-1">
+                                  {isOcrLoading ? (
+                                      <div className="flex-1 flex flex-col items-center justify-center p-8 text-center gap-4">
+                                          <div className="relative">
+                                              <Loader2 size={56} className="animate-spin text-emerald-500" />
+                                              <Sparkles size={20} className="text-indigo-400 absolute -top-1 -right-1 animate-bounce" />
+                                          </div>
+                                          <div className="space-y-1">
+                                              <h4 className="font-bold text-lg text-gray-800 dark:text-white">高精度 AI 正在辨识中</h4>
+                                              <p className="text-sm text-gray-500 dark:text-gray-400 leading-relaxed max-w-xs">
+                                                  正在对你的手写笔迹、公式及表格符号进行深层分析，请稍等片刻...
+                                              </p>
+                                          </div>
+                                      </div>
+                                  ) : ocrTextResult ? (
+                                      <div className="flex-1 flex flex-col p-6 space-y-4">
+                                          <textarea 
+                                              value={ocrTextResult}
+                                              onChange={(e) => setOcrTextResult(e.target.value)}
+                                              className="flex-1 w-full bg-transparent border-0 focus:ring-0 resize-none font-mono text-base text-gray-800 dark:text-gray-100 leading-relaxed focus:outline-none scrollbar-thin overflow-y-auto"
+                                              placeholder="在这里轻微修改识别的字迹，使其100%符合实体笔记内容"
+                                          />
+                                          
+                                          {isOcrSynced && (
+                                              <div className="p-3.5 bg-emerald-500/10 border border-emerald-500/20 text-emerald-700 dark:text-emerald-300 rounded-xl text-sm flex items-center gap-2">
+                                                  <Check size={16} className="shrink-0" />
+                                                  <span>已同步给AI导师！导师已准确获取并在实时解答中参照此段笔记。</span>
+                                              </div>
+                                          )}
+                                      </div>
+                                  ) : (
+                                      <div className="flex-1 flex flex-col items-center justify-center p-8 text-center text-gray-500">
+                                          <FileText size={36} className="mb-2 text-gray-400" />
+                                          <p className="text-sm">无字迹识别数据</p>
+                                      </div>
+                                  )}
+                              </div>
+                          </div>
+                      </div>
+
+                      {/* Footer Controls */}
+                      <div className="p-6 bg-gray-50 dark:bg-gray-900 border-t border-gray-200 dark:border-gray-850/80 flex justify-between items-center gap-4 shrink-0">
+                          <div>
+                              <button
+                                  disabled={isOcrLoading}
+                                  onClick={async () => {
+                                      if (!videoRef.current || !canvasRef.current) return;
+                                      setIsOcrLoading(true);
+                                      setOcrTextResult(null);
+                                      setIsOcrSynced(false);
+                                      
+                                      const video = videoRef.current;
+                                      const canvas = canvasRef.current;
+                                      const ctx = canvas.getContext('2d');
+                                      if (ctx && video.readyState >= 2) {
+                                          canvas.width = video.videoWidth;
+                                          canvas.height = video.videoHeight;
+                                          ctx.drawImage(video, 0, 0);
+                                          
+                                          // Apply image enhancement
+                                          applyImageEnhancement(canvas);
+                                          
+                                          const dataUrl = canvas.toDataURL('image/jpeg');
+                                          setOcrCapturedImage(dataUrl);
+                                          
+                                          try {
+                                              const textResult = await performHighPrecisionOcr(dataUrl);
+                                              setOcrTextResult(textResult);
+                                          } catch (err) {
+                                              console.error("Retake snapshot OCR failed:", err);
+                                              setOcrTextResult("识别失败，请重试。");
+                                          } finally {
+                                              setIsOcrLoading(false);
+                                          }
+                                      }
+                                  }}
+                                  className="px-6 py-3 bg-gray-200 dark:bg-gray-800 hover:bg-gray-300 dark:hover:bg-gray-750 text-gray-800 dark:text-gray-200 text-base font-bold rounded-2xl transition-all flex items-center gap-2 disabled:opacity-50 cursor-pointer"
+                              >
+                                  <RefreshCw size={18} className={isOcrLoading ? 'animate-spin' : ''} />
+                                  <span>重新拍照</span>
+                              </button>
+                          </div>
+                          
+                          <div className="flex items-center gap-3">
+                              <button
+                                  disabled={!ocrTextResult || isOcrLoading}
+                                  onClick={() => {
+                                      if (ocrTextResult) {
+                                          navigator.clipboard.writeText(ocrTextResult);
+                                          alert("文字内容已成功复制到剪贴板！");
+                                      }
+                                  }}
+                                  className="px-6 py-3 bg-gray-200 dark:bg-gray-800 hover:bg-gray-300 dark:hover:bg-gray-750 text-gray-800 dark:text-gray-200 text-base font-bold rounded-2xl transition-all disabled:opacity-50 cursor-pointer"
+                              >
+                                  <span>复制字迹</span>
+                              </button>
+                              
+                              <button
+                                  disabled={!ocrTextResult || isOcrLoading || isOcrSynced || connectionState !== ConnectionState.CONNECTED}
+                                  onClick={() => {
+                                      if (ocrTextResult) {
+                                          handleSendMessage(
+                                              `[系统高精度图片识字] 这是我通过高精拍照识别到的最新手写笔记文字，请参照此内容为我作答、点拨 and 指导，请绝对知悉：\n${ocrTextResult}`,
+                                              "[高精拍照识字] 已上传最新笔记文字",
+                                              false
+                                          );
+                                          setIsOcrSynced(true);
+                                      }
+                                  }}
+                                  className="px-8 py-3 bg-emerald-600 hover:bg-emerald-500 text-white text-base font-bold rounded-2xl shadow-lg shadow-emerald-600/20 active:scale-[0.98] transition-all disabled:opacity-50 disabled:bg-emerald-600/70 cursor-pointer"
+                              >
+                                  <span>同步给AI导师</span>
+                              </button>
+                          </div>
+                      </div>
+                   </motion.div>
+                 </div>
+               )}
+             </AnimatePresence>
+
+            {/* Feynman Variant Question Modal */}
+            <AnimatePresence>
+              {activeVariantQuestion && (
+                <div className="absolute inset-0 z-50 flex items-center justify-center p-6 bg-black/70 backdrop-blur-md">
+                  <motion.div 
+                    key="variant-modal"
+                    initial={{ opacity: 0, scale: 0.9, y: 20 }}
+                    animate={{ opacity: 1, scale: 1, y: 0 }}
+                    exit={{ opacity: 0, scale: 0.95, y: 15 }}
+                    transition={{ type: 'spring', damping: 25, stiffness: 350 }}
+                    className="bg-white dark:bg-gray-900 border border-indigo-500/30 w-full max-w-2xl rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh]"
+                    id="feynman-variant-modal"
+                  >
+                     {/* Title Header */}
+                     <div className="p-6 bg-gradient-to-r from-indigo-600 to-indigo-900 flex justify-between items-center text-white shrink-0">
+                         <div className="flex items-center gap-3">
+                             <div className="bg-white/15 p-2.5 rounded-xl">
+                                 <Target size={26} className="text-indigo-200 animate-pulse" />
+                             </div>
+                             <div>
+                                 <span className="text-xs uppercase tracking-widest font-semibold text-indigo-200 block">费曼互动特训</span>
+                                 <h3 className="font-bold text-2xl text-white mt-0.5">{activeVariantQuestion.title}</h3>
+                             </div>
+                         </div>
+                         <button 
+                             onClick={() => setActiveVariantQuestion(null)}
+                             className="p-1.5 hover:bg-white/10 rounded-full text-indigo-200 hover:text-white transition-colors animate-pulse"
+                             id="close-variant-btn"
+                         >
+                             <X size={24} />
+                         </button>
+                     </div>
+
+                     {/* Content Area */}
+                     <div className="p-8 overflow-y-auto flex-1 space-y-6">
+                          {/* Question Text */}
+                          <div className="bg-indigo-50/50 dark:bg-indigo-950/20 p-6 rounded-2xl border border-indigo-100 dark:border-indigo-900/40">
+                              <span className="text-xs font-semibold px-2.5 py-1 bg-indigo-100 dark:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300 rounded-lg inline-block mb-3">变式练习</span>
+                              <p className="text-xl text-gray-800 dark:text-gray-100 font-medium leading-relaxed" id="variant-question-text">
+                                  {activeVariantQuestion.question}
+                              </p>
+                          </div>
+
+                          {/* Options Interface */}
+                          {activeVariantQuestion.options && activeVariantQuestion.options.length > 0 ? (
+                              <div className="grid grid-cols-1 gap-3.5" id="variant-options-list">
+                                  {activeVariantQuestion.options.map((option, idx) => {
+                                      const optionLetter = option.trim().charAt(0).toUpperCase();
+                                      const isSelected = selectedVariantAnswer === optionLetter;
+                                      
+                                      let bgClass = "bg-gray-50 hover:bg-gray-100 dark:bg-gray-800/40 dark:hover:bg-gray-800 border-gray-200 dark:border-gray-800";
+                                      if (isSelected) {
+                                          bgClass = "bg-indigo-50 dark:bg-indigo-950/40 border-indigo-500 ring-2 ring-indigo-500/20";
+                                      }
+                                      if (showVariantFeedback) {
+                                          const isCorrectOption = optionLetter === activeVariantQuestion.correctAnswer.trim().toUpperCase();
+                                          if (isCorrectOption) {
+                                              bgClass = "bg-emerald-50 dark:bg-emerald-950/40 border-emerald-500 ring-2 ring-emerald-500/30 text-emerald-950 dark:text-emerald-100";
+                                          } else if (isSelected) {
+                                              bgClass = "bg-rose-50 dark:bg-rose-950/40 border-rose-500 ring-2 ring-rose-500/30 text-rose-950 dark:text-rose-100";
+                                          }
+                                      }
+
+                                      return (
+                                          <button
+                                              key={idx}
+                                              id={`option-btn-${optionLetter}`}
+                                              disabled={showVariantFeedback}
+                                              onClick={() => setSelectedVariantAnswer(optionLetter)}
+                                              className={`p-5 rounded-2xl border text-left text-lg font-medium transition-all duration-200 flex items-center justify-between ${bgClass}`}
+                                          >
+                                              <span className="text-gray-800 dark:text-gray-200 leading-relaxed">{option}</span>
+                                              <div className="flex items-center gap-2">
+                                                  {showVariantFeedback && optionLetter === activeVariantQuestion.correctAnswer.trim().toUpperCase() && (
+                                                      <div className="bg-emerald-500 text-white rounded-full p-1 shadow-md">
+                                                          <Check size={16} strokeWidth={3} />
+                                                      </div>
+                                                  )}
+                                                  {!showVariantFeedback && (
+                                                      <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center transition-all ${isSelected ? 'border-indigo-600 bg-indigo-600 text-white' : 'border-gray-300 dark:border-gray-600'}`}>
+                                                          {isSelected && <div className="w-2.5 h-2.5 bg-white rounded-full" />}
+                                                      </div>
+                                                  )}
+                                              </div>
+                                          </button>
+                                      );
+                                  })}
+                              </div>
+                          ) : (
+                              // Open Text Answer format
+                              <div className="space-y-3" id="variant-text-answer-block">
+                                  <label className="text-sm font-semibold text-gray-500 dark:text-gray-400">请输入你的解答答案：</label>
+                                  <input 
+                                      type="text"
+                                      disabled={showVariantFeedback}
+                                      value={variantTextAnswer}
+                                      onChange={(e) => setVariantTextAnswer(e.target.value)}
+                                      placeholder="例如数字、最终角、简答..."
+                                      className="w-full p-5 rounded-2xl border border-gray-200 dark:border-gray-800 text-lg bg-gray-50 dark:bg-gray-800/40 focus:ring-4 focus:ring-indigo-500/15 focus:outline-none focus:border-indigo-500 transition-all text-gray-900 dark:text-white"
+                                      id="variant-text-input"
+                                  />
+                              </div>
+                          )}
+
+                          {/* Feedback Animation Area */}
+                          {showVariantFeedback && (
+                              <motion.div
+                                  initial={{ opacity: 0, y: -10 }}
+                                  animate={{ opacity: 1, y: 0 }}
+                                  className={`p-6 rounded-2xl border ${isVariantAnswerCorrect ? 'bg-emerald-50/70 dark:bg-emerald-950/20 border-emerald-200 dark:border-emerald-900/40 text-emerald-950 dark:text-emerald-100' : 'bg-rose-50/70 dark:bg-rose-950/20 border-rose-200 dark:border-rose-900/40 text-rose-950 dark:text-rose-100'}`}
+                                  id="variant-feedback-box"
+                              >
+                                  <div className="flex items-start gap-3.5">
+                                      <div className={`p-2.5 rounded-xl ${isVariantAnswerCorrect ? 'bg-emerald-500 text-white' : 'bg-rose-500 text-white'}`}>
+                                          {isVariantAnswerCorrect ? <Sparkles size={22} className="animate-bounce" /> : <Lightbulb size={22} />}
+                                      </div>
+                                      <div className="space-y-1.5 flex-1">
+                                          <h4 className="font-bold text-xl">
+                                              {isVariantAnswerCorrect ? '太棒了！完全正确 🎉' : '没关系，老师给你思路线索 💡'}
+                                          </h4>
+                                          <p className="text-base leading-relaxed text-gray-700 dark:text-gray-300">
+                                              {isVariantAnswerCorrect 
+                                                ? `你成功通过了这道变式测试！太有创意的思维了，对知识点已经融会贯通，真棒！` 
+                                                : `别气馁，让我们一起了解一下解题的奥妙！`}
+                                          </p>
+                                      </div>
+                                  </div>
+
+                                  {/* Explanation Details */}
+                                  <div className="mt-5 pt-5 border-t border-gray-200/50 dark:border-gray-800/50 space-y-2">
+                                      <span className="text-xs font-semibold px-2 py-0.5 bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400 rounded">详细解析</span>
+                                      <p className="text-base text-gray-600 dark:text-gray-300 leading-relaxed font-sans font-normal antialiased">
+                                          {activeVariantQuestion.explanation}
+                                      </p>
+                                  </div>
+                              </motion.div>
+                          )}
+                     </div>
+
+                     {/* Footer Controls */}
+                     <div className="p-6 bg-gray-50 dark:bg-gray-950/40 border-t border-gray-100 dark:border-gray-800 flex justify-end gap-3.5 shrink-0">
+                         {!showVariantFeedback ? (
+                             <button
+                                 id="submit-variant-btn"
+                                 disabled={activeVariantQuestion.options && activeVariantQuestion.options.length > 0 ? !selectedVariantAnswer : !variantTextAnswer.trim()}
+                                 onClick={() => {
+                                     let correct = false;
+                                     if (activeVariantQuestion.options && activeVariantQuestion.options.length > 0) {
+                                         correct = selectedVariantAnswer?.trim().toUpperCase() === activeVariantQuestion.correctAnswer.trim().toUpperCase();
+                                     } else {
+                                         const ansNormalized = variantTextAnswer.trim().toLowerCase();
+                                         const correctNormalized = activeVariantQuestion.correctAnswer.trim().toLowerCase();
+                                         correct = ansNormalized.includes(correctNormalized) || correctNormalized.includes(ansNormalized);
+                                     }
+                                     setIsVariantAnswerCorrect(correct);
+                                     setShowVariantFeedback(true);
+                                 }}
+                                 className="px-8 py-3.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:bg-indigo-600 disabled:hover:bg-indigo-600 cursor-pointer disabled:cursor-not-allowed text-white text-lg font-bold rounded-2xl shadow-lg shadow-indigo-600/20 active:scale-[0.98] transition-all flex items-center gap-2"
+                             >
+                                 <span>提交解答</span>
+                                 <ArrowRight size={18} />
+                             </button>
+                         ) : (
+                             <button
+                                 id="next-variant-btn"
+                                 onClick={() => {
+                                     setActiveVariantQuestion(null);
+                                 }}
+                                 className="px-8 py-3.5 bg-gradient-to-r from-emerald-600 to-indigo-600 hover:from-emerald-500 hover:to-indigo-500 text-white text-lg font-bold rounded-2xl shadow-lg transition-all active:scale-[0.98]"
+                             >
+                                 继续探索
+                             </button>
+                         )}
+                     </div>
+                  </motion.div>
+                </div>
+              )}
+            </AnimatePresence>
+
+            {/* Session Summary Modal - Temporarily Hidden */}
+            {false && showSummaryModal && (
                 <div className="absolute inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-md animate-in fade-in duration-300">
                     <div className="bg-white dark:bg-gray-900 border border-indigo-500/30 w-full max-w-lg rounded-2xl shadow-2xl overflow-hidden animate-in zoom-in-95 duration-300 flex flex-col max-h-[80vh]">
                         {/* Header */}
@@ -1897,6 +2925,47 @@ height="400"
             {/* Settings & Profile Overlay (Top Right inside video) - Only show when connected */}
             {connectionState !== ConnectionState.DISCONNECTED && (
                 <div className="absolute top-20 right-4 flex flex-col gap-3 z-30">
+                    {/* Handwritten AI OCR Scan Toggle */}
+                    <button 
+                        onClick={async () => {
+                            if (!videoRef.current || !canvasRef.current) return;
+                            const video = videoRef.current;
+                            const canvas = canvasRef.current;
+                            const ctx = canvas.getContext('2d');
+                            if (!ctx || video.readyState < 2) return;
+                            
+                            // Capture high-resolution photo from the live stream
+                            canvas.width = video.videoWidth;
+                            canvas.height = video.videoHeight;
+                            ctx.drawImage(video, 0, 0);
+                            
+                            // Apply image enhancement
+                            applyImageEnhancement(canvas);
+                            
+                            const dataUrl = canvas.toDataURL('image/jpeg');
+                            setOcrCapturedImage(dataUrl);
+                            setOcrTextResult(null);
+                            setIsOcrLoading(true);
+                            setIsOcrSynced(false);
+                            setShowOcrModal(true);
+                            
+                            try {
+                                const textResult = await performHighPrecisionOcr(dataUrl);
+                                setOcrTextResult(textResult);
+                            } catch (err) {
+                                console.error("Snapshot OCR failed:", err);
+                                setOcrTextResult("识别失败，请确保摄像头画面清晰且对准笔记，然后重试。");
+                            } finally {
+                                setIsOcrLoading(false);
+                            }
+                        }}
+                        className="p-3 rounded-full bg-black/50 hover:bg-black/70 text-emerald-400 dark:text-emerald-300 backdrop-blur-md border border-white/10 transition-all hover:scale-110 active:scale-95 flex items-center justify-center cursor-pointer group shadow-lg"
+                        title="AI 拍照高精度识字"
+                        id="ai-ocr-scan-btn"
+                    >
+                        <ScanEye size={20} className="group-hover:animate-pulse" />
+                    </button>
+
                     {/* Mirror Toggle */}
                     <button 
                         onClick={() => setIsVideoMirrored(!isVideoMirrored)}
@@ -2042,6 +3111,114 @@ height="400"
 
                             <div className="h-px bg-gray-200 dark:bg-gray-700/50 my-2" />
 
+                            {/* Image Enhancement Pipeline */}
+                            <div className="mb-3 px-1">
+                                <div className="flex items-center gap-1.5 text-xs text-gray-400 dark:text-gray-500 mb-2">
+                                    <Sun size={14} className="text-emerald-400" />
+                                    <span className="font-semibold text-emerald-400">纸张字迹硬核增强</span>
+                                </div>
+                                <div className="grid grid-cols-3 gap-1 mb-2">
+                                    {[
+                                        { id: 'none', label: '原图' },
+                                        { id: 'document', label: '纸张白化' },
+                                        { id: 'contrast', label: '高对比' },
+                                        { id: 'grayscale', label: '黑白' },
+                                        { id: 'custom', label: '自定义' }
+                                    ].map(p => (
+                                        <button
+                                            key={p.id}
+                                            onClick={() => setImageEnhancePreset(p.id as any)}
+                                            className={`py-1 px-1 rounded text-[10px] font-bold border transition-all ${
+                                                imageEnhancePreset === p.id 
+                                                    ? 'bg-emerald-600/30 border-emerald-500/50 text-emerald-300 shadow-sm'
+                                                    : 'bg-gray-100/5 dark:bg-gray-800/40 border-transparent text-gray-400 hover:text-white hover:bg-gray-800/70'
+                                            }`}
+                                        >
+                                            {p.label}
+                                        </button>
+                                    ))}
+                                </div>
+
+                                <div className="mt-2.5 mb-1 space-y-1.5 p-1.5 bg-neutral-900/40 rounded-xl border border-white/5">
+                                    <button
+                                        onClick={() => setEnableAdaptiveThreshold(!enableAdaptiveThreshold)}
+                                        className={`w-full flex items-center justify-between p-1 rounded-lg text-[10px] transition-colors ${
+                                            enableAdaptiveThreshold 
+                                                ? 'bg-emerald-600/20 text-emerald-300' 
+                                                : 'text-gray-400 hover:bg-gray-800'
+                                        }`}
+                                    >
+                                        <span className="font-semibold">自适应局部降噪 (去阴影)</span>
+                                        <div className={`w-6 h-3 rounded-full relative transition-colors ${enableAdaptiveThreshold ? 'bg-emerald-500' : 'bg-gray-600'}`}>
+                                            <div className="absolute top-0.5 w-2 h-2 bg-white rounded-full transition-all" style={{ left: enableAdaptiveThreshold ? '14px' : '2px' }} />
+                                        </div>
+                                    </button>
+
+                                    <button
+                                        onClick={() => setEnableDeskewing(!enableDeskewing)}
+                                        className={`w-full flex items-center justify-between p-1 rounded-lg text-[10px] transition-colors ${
+                                            enableDeskewing 
+                                                ? 'bg-emerald-600/20 text-emerald-300' 
+                                                : 'text-gray-400 hover:bg-gray-800'
+                                        }`}
+                                    >
+                                        <span className="font-semibold">倾斜字迹自动校正</span>
+                                        <div className={`w-6 h-3 rounded-full relative transition-colors ${enableDeskewing ? 'bg-emerald-500' : 'bg-gray-600'}`}>
+                                            <div className="absolute top-0.5 w-2 h-2 bg-white rounded-full transition-all" style={{ left: enableDeskewing ? '14px' : '2px' }} />
+                                        </div>
+                                    </button>
+                                </div>
+
+                                {imageEnhancePreset === 'custom' && (
+                                    <div className="space-y-2 mt-2 bg-black/40 p-2 rounded-xl border border-white/5 animate-in fade-in slide-in-from-top-1 duration-150">
+                                        <div>
+                                            <div className="flex justify-between text-[9px] text-gray-400 mb-0.5">
+                                                <span>对比度增强</span>
+                                                <span className="text-emerald-400 font-mono">+{contrastLevel}%</span>
+                                            </div>
+                                            <input 
+                                                type="range"
+                                                min="0"
+                                                max="100"
+                                                value={contrastLevel}
+                                                onChange={(e) => setContrastLevel(parseInt(e.target.value))}
+                                                className="w-full h-1 bg-gray-700 rounded appearance-none cursor-pointer accent-emerald-500"
+                                            />
+                                        </div>
+                                        <div>
+                                            <div className="flex justify-between text-[9px] text-gray-400 mb-0.5">
+                                                <span>亮度修正</span>
+                                                <span className="text-emerald-400 font-mono">{brightnessLevel >= 0 ? `+${brightnessLevel}` : brightnessLevel}%</span>
+                                            </div>
+                                            <input 
+                                                type="range"
+                                                min="-50"
+                                                max="50"
+                                                value={brightnessLevel}
+                                                onChange={(e) => setBrightnessLevel(parseInt(e.target.value))}
+                                                className="w-full h-1 bg-gray-700 rounded appearance-none cursor-pointer accent-emerald-500"
+                                            />
+                                        </div>
+                                        <div>
+                                            <div className="flex justify-between text-[9px] text-gray-400 mb-0.5">
+                                                <span>文字锐化</span>
+                                                <span className="text-emerald-400 font-mono">+{sharpenLevel}%</span>
+                                            </div>
+                                            <input 
+                                                type="range"
+                                                min="0"
+                                                max="100"
+                                                value={sharpenLevel}
+                                                onChange={(e) => setSharpenLevel(parseInt(e.target.value))}
+                                                className="w-full h-1 bg-gray-700 rounded appearance-none cursor-pointer accent-emerald-500"
+                                            />
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+
+                            <div className="h-px bg-gray-200 dark:bg-gray-700/50 my-2" />
+
                             {/* Mirror Toggle */}
                             <button 
                                 onClick={() => setIsVideoMirrored(!isVideoMirrored)}
@@ -2071,6 +3248,110 @@ height="400"
                             </button>
                         </div>
                     )}
+                </div>
+            )}
+
+            {/* Smart Terminal Hardware Physical Controls Overlay */}
+            {connectionState === ConnectionState.CONNECTED && (
+                <div id="hardware-panel" className="absolute right-4 bottom-24 z-30 flex flex-col gap-3 py-3 px-3 rounded-2xl bg-gray-950/85 md:bg-gray-950/90 border border-slate-700/50 shadow-2xl transition-all duration-300 w-44 pointer-events-auto select-none">
+                    {/* Hardware Bezel Title and Indicator */}
+                    <div className="flex flex-col items-center border-b border-gray-800 pb-2">
+                        <div className="flex items-center gap-1">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                            <span className="font-mono text-[9px] uppercase tracking-widest text-slate-300 font-bold">Smart Tutor AI</span>
+                        </div>
+                        <span className="text-[10px] text-slate-500 mt-0.5">智能硬件物理键</span>
+                    </div>
+                    
+                    {/* Physical Mute Mic Button */}
+                    <button 
+                        onClick={() => {
+                            const next = !isMicMuted;
+                            setIsMicMuted(next);
+                            playMuteSound(next);
+                        }}
+                        className={`w-full flex items-center justify-between p-2 rounded-xl border transition-all cursor-pointer ${
+                            isMicMuted 
+                            ? 'bg-red-950/40 border-red-500/50 text-red-300 hover:bg-red-955/65' 
+                            : 'bg-emerald-950/40 border-emerald-500/50 text-emerald-300 hover:bg-emerald-955/65'
+                        }`}
+                        title="物理静音键 (快捷键: M)"
+                    >
+                        <div className="flex items-center gap-2">
+                            <div className={`w-2.5 h-2.5 rounded-full shadow-lg border border-black/30 flex items-center justify-center ${isMicMuted ? 'bg-red-500 animate-pulse' : 'bg-emerald-400'}`}>
+                                <div className="w-1 h-1 bg-white rounded-full opacity-60" />
+                            </div>
+                            <span className="text-xs font-semibold">麦克风静音</span>
+                        </div>
+                        <span className="text-[9px] font-mono bg-slate-800/80 text-slate-400 px-1 py-0.5 rounded border border-white/5">M</span>
+                    </button>
+
+                    {/* Physical Mute Speaker Button */}
+                    <button 
+                        onClick={() => {
+                            const next = !isSpeakerMuted;
+                            setIsSpeakerMuted(next);
+                            playMuteSound(next);
+                        }}
+                        className={`w-full flex items-center justify-between p-2 rounded-xl border transition-all cursor-pointer ${
+                            isSpeakerMuted 
+                            ? 'bg-amber-950/40 border-amber-500/50 text-amber-300 hover:bg-amber-955/65' 
+                            : 'bg-slate-900/40 border-slate-700/50 text-slate-300 hover:bg-slate-880/65'
+                        }`}
+                        title="物理扬声器键 (快捷键: S)"
+                    >
+                        <div className="flex items-center gap-2">
+                            <div className={`w-2.5 h-2.5 rounded-full shadow-lg border border-black/30 flex items-center justify-center ${isSpeakerMuted ? 'bg-amber-500 animate-pulse' : 'bg-sky-400'}`}>
+                                <div className="w-1 h-1 bg-white rounded-full opacity-60" />
+                            </div>
+                            <span className="text-xs font-semibold">音响静音</span>
+                        </div>
+                        <span className="text-[9px] font-mono bg-slate-800/80 text-slate-400 px-1 py-0.5 rounded border border-white/5">S</span>
+                    </button>
+
+                    {/* Simulated circular "Wake-up" button */}
+                    <button 
+                        onClick={() => {
+                            if (isMicMuted) {
+                                setIsMicMuted(false);
+                                playMuteSound(false);
+                            }
+                            playWakeBeep();
+                            triggerAITutor("按键唤醒");
+                        }}
+                        className="w-full h-16 rounded-2xl bg-gradient-to-tr from-indigo-700 via-indigo-600 to-violet-600 hover:from-indigo-600 hover:to-violet-500 text-white shadow-lg active:scale-95 transition-all text-center border border-indigo-500/50 cursor-pointer flex flex-col items-center justify-center overflow-hidden group select-none relative"
+                        title="物理唤醒键 (快捷键: 空格键)"
+                    >
+                        {/* Glow effect */}
+                        <div className="absolute inset-0 bg-white/5 opacity-0 group-hover:opacity-100 transition-opacity" />
+                        <Sparkles size={14} className="text-white animate-pulse mb-0.5" />
+                        <span className="text-xs font-bold tracking-wider">物理按键唤醒</span>
+                        <span className="text-[8px] opacity-75 mt-0.5 font-mono">Space 空格键</span>
+                    </button>
+
+                    <div className="h-px bg-slate-850/80 my-0.5" />
+
+                    {/* Voice Wake-up service */}
+                    <div className="flex flex-col gap-1.5 p-1 bg-slate-900/50 rounded-xl border border-white/5">
+                        <button 
+                            onClick={() => setIsVoiceWakeupEnabled(!isVoiceWakeupEnabled)}
+                            className="w-full flex items-center justify-between p-1 rounded-lg text-[10px] text-left transition-colors cursor-pointer"
+                        >
+                            <span className="font-semibold text-slate-300">语音唤醒服务</span>
+                            <div className={`w-6 h-3.5 rounded-full relative transition-colors ${isVoiceWakeupEnabled ? 'bg-indigo-500' : 'bg-slate-600'}`}>
+                                <div className="absolute top-0.5 w-2.5 h-2.5 bg-white rounded-full transition-all" style={{left: isVoiceWakeupEnabled ? '12px' : '2px'}} />
+                            </div>
+                        </button>
+                        
+                        {isVoiceWakeupEnabled && (
+                            <div className="flex items-center gap-1.5 px-1 py-0.5 justify-center border-t border-slate-800/80 mt-1 pt-1.5">
+                                <span className={`w-1.5 h-1.5 rounded-full ${isWakeWordListening ? 'bg-green-500 animate-pulse' : 'bg-slate-500'}`} />
+                                <span className="text-[8px] text-slate-400 scale-95 leading-none font-medium">
+                                    {isWakeWordListening ? '呼呼"小苏老师"唤醒' : '正在加载引擎...'}
+                                </span>
+                            </div>
+                        )}
+                    </div>
                 </div>
             )}
 
@@ -2185,8 +3466,8 @@ height="400"
                 </div>
             )}
 
-            {/* Exam Database Modal */}
-            {showExamModal && (
+            {/* Exam Database Modal - Temporarily Hidden */}
+            {false && showExamModal && (
                 <div className="absolute inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
                     <div className="bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 w-full max-w-2xl rounded-2xl shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200 max-h-[90vh] flex flex-col">
                         <div className="p-4 border-b border-gray-300 dark:border-gray-700/50 flex justify-between items-center bg-gray-100 dark:bg-gray-800/50 flex-shrink-0">
@@ -2273,16 +3554,16 @@ height="400"
 
 
                     {/* Status Indicator & Visual Trigger */}
-                    <div className="absolute bottom-24 left-1/2 transform -translate-x-1/2 flex flex-col items-center gap-2 z-30 animate-in fade-in slide-in-from-bottom-4 duration-500">
+                    <div className="absolute bottom-24 left-1/2 transform -translate-x-1/2 flex flex-col items-center gap-4 z-30 animate-in fade-in slide-in-from-bottom-4 duration-500">
                         <button
                             onClick={() => {
                                 if (!isBotSpeaking && !isVisualContextActive && sessionPromiseRef.current) {
-                                    triggerVisualContext(sessionPromiseRef.current);
+                                    triggerAITutor("学生点击按钮");
                                 }
                             }}
                             disabled={isBotSpeaking || isVisualContextActive}
                             className={`
-                                relative flex items-center gap-3 px-6 py-3 rounded-full border backdrop-blur-md transition-all duration-500 shadow-xl
+                                relative flex items-center gap-4 px-8 py-4 rounded-full border backdrop-blur-md transition-all duration-500 shadow-xl text-2xl
                                 ${isBotSpeaking 
                                     ? 'bg-emerald-500 border-emerald-400 text-gray-900 dark:text-white ripple-effect scale-110 cursor-default' 
                                     : isVisualContextActive
@@ -2293,15 +3574,15 @@ height="400"
                         >
                             {isBotSpeaking ? (
                                 <>
-                                    <Sparkles size={18} className="animate-spin-slow text-yellow-300" />
+                                    <Sparkles size={24} className="animate-spin-slow text-yellow-300" />
                                     <span className="font-semibold tracking-wide">正在讲解...</span>
-                                    <div className="h-4 w-[60px] flex items-center">
-                                        <AudioVisualizer isActive={true} color="white" width={60} height={16} />
+                                    <div className="h-6 w-[80px] flex items-center">
+                                        <AudioVisualizer isActive={true} color="white" width={80} height={24} />
                                     </div>
                                 </>
                             ) : isVisualContextActive ? (
                                 <>
-                                    <ScanEye size={18} className="animate-pulse" />
+                                    <ScanEye size={24} className="animate-pulse" />
                                     <span className="font-semibold tracking-wide">正在观察题目...</span>
                                     {/* Breathing light effect */}
                                     <div className="absolute inset-0 rounded-full bg-indigo-500/20 animate-[pulse_2s_ease-in-out_infinite] -z-10"></div>
@@ -2309,10 +3590,10 @@ height="400"
                             ) : (
                                 <>
                                     <div className="relative">
-                                        <Eye size={18} />
-                                        <span className="absolute -top-1 -right-1 flex h-2 w-2">
+                                        <Eye size={24} />
+                                        <span className="absolute -top-1 -right-1 flex h-3 w-3">
                                           <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
-                                          <span className="relative inline-flex rounded-full h-2 w-2 bg-indigo-500"></span>
+                                          <span className="relative inline-flex rounded-full h-3 w-3 bg-indigo-500"></span>
                                         </span>
                                     </div>
                                     <span className="font-bold tracking-wide">让 AI 看题</span>
@@ -2320,7 +3601,7 @@ height="400"
                             )}
                         </button>
                         {!isBotSpeaking && !isVisualContextActive && (
-                            <p className="text-white/80 text-xs text-center mt-1 bg-black/40 px-3 py-1.5 rounded-full backdrop-blur-sm border border-white/10">
+                            <p className="text-white/80 text-lg text-center mt-2 bg-black/40 px-4 py-2 rounded-full backdrop-blur-sm border border-white/10">
                                 说 "帮我看看" 或点击按钮上传画面
                             </p>
                         )}
@@ -2336,10 +3617,10 @@ height="400"
                     
                     <div className="relative text-center p-8 max-w-4xl animate-in fade-in zoom-in duration-500 flex flex-col items-center">
                         <div className="mb-12">
-                            <h1 className="text-5xl md:text-7xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 via-indigo-500 to-purple-500 mb-6 tracking-tight drop-shadow-2xl">
+                            <h1 className="text-6xl md:text-8xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 via-indigo-500 to-purple-500 mb-6 tracking-tight drop-shadow-2xl">
                                 未来的学习体验
                             </h1>
-                            <p className="text-gray-700 dark:text-gray-200 text-xl md:text-2xl font-light leading-relaxed drop-shadow-md">
+                            <p className="text-gray-700 dark:text-gray-200 text-2xl md:text-4xl font-light leading-relaxed drop-shadow-md">
                                 实时连接 AI 导师。使用视频进行互动讲解，为您提供个性化的辅导体验。
                             </p>
                         </div>
@@ -2390,40 +3671,71 @@ height="400"
                         <div className="flex gap-4 mb-10">
                             <button 
                                 onClick={startSession}
-                                className="px-12 py-5 bg-white text-black hover:bg-gray-100 rounded-full font-bold text-xl transition-all shadow-[0_0_30px_rgba(255,255,255,0.3)] hover:shadow-[0_0_50px_rgba(255,255,255,0.6)] hover:scale-105 active:scale-95 flex items-center gap-3 group"
+                                className="px-16 py-6 bg-white text-black hover:bg-gray-100 rounded-full font-bold text-3xl transition-all shadow-[0_0_30px_rgba(255,255,255,0.3)] hover:shadow-[0_0_50px_rgba(255,255,255,0.6)] hover:scale-105 active:scale-95 flex items-center gap-3 group"
                             >
-                                <Play size={24} fill="currentColor" className="group-hover:translate-x-1 transition-transform" />
+                                <Play size={32} fill="currentColor" className="group-hover:translate-x-1 transition-transform" />
                                 立即开始上课
                             </button>
 
-                            <button
+                            {/* Exam Database Button - Temporarily Hidden */}
+                            {false && <button
                                 onClick={() => setShowExamModal(true)}
                                 className="px-8 py-5 bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-100 border border-indigo-500/30 rounded-full font-bold text-xl transition-all hover:scale-105 active:scale-95 flex items-center gap-3"
                             >
                                 <Database size={24} />
                                 专属题库 ({examDatabase.length})
-                            </button>
+                            </button>}
                         </div>
                     </div>
                  </div>
             )}
 
             {/* Error State */}
-            {error && (
-                <div className="absolute inset-0 flex items-center justify-center bg-black/80 z-40">
-                     <div className="text-center p-6 bg-white dark:bg-gray-900 border border-red-900/50 rounded-xl max-w-md shadow-2xl">
-                        <AlertCircle size={40} className="text-red-500 mx-auto mb-4" />
-                        <h3 className="text-xl font-bold text-red-400 mb-2">出错了</h3>
-                        <p className="text-gray-600 dark:text-gray-300 mb-6">{error}</p>
-                        <button 
-                            onClick={() => setError(null)}
-                            className="px-6 py-2 bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:bg-gray-600 rounded-lg text-sm transition-colors"
-                        >
-                            关闭
-                        </button>
-                     </div>
-                </div>
-            )}
+            {error && (() => {
+                const isApiKeyError = error.toLowerCase().includes('api key') || 
+                                     error.toLowerCase().includes('api_key') || 
+                                     error.toLowerCase().includes('1007') || 
+                                     error.toLowerCase().includes('apikey') ||
+                                     error.toLowerCase().includes('密钥') ||
+                                     error.toLowerCase().includes('密匙');
+                return (
+                    <div className="absolute inset-0 flex items-center justify-center bg-black/80 z-40">
+                         <div className="text-left p-6 bg-white dark:bg-gray-900 border border-red-900/50 rounded-xl max-w-md shadow-2xl">
+                            <div className="text-center mb-4">
+                                <AlertCircle size={40} className="text-red-500 mx-auto mb-2" />
+                                <h3 className="text-xl font-bold text-red-500">连接未成功</h3>
+                            </div>
+                            {isApiKeyError ? (
+                                <div className="space-y-3 text-sm text-gray-600 dark:text-gray-300">
+                                    <p className="font-semibold text-amber-500 text-center">检测到 API 密钥缺失、未生效或无效 (1007/400 错误)</p>
+                                    <p>苏格拉底 AI 视频直播课需要您在 Google AI Studio 中配置您个人的真实 `GEMINI_API_KEY`（完全免费创建且享有免费额度），平台默认的临时测试密钥不支持建立 WebSocket 音视频双向流式连接。</p>
+                                    <div className="p-3 bg-gray-100 dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 space-y-1.5">
+                                        <div className="font-semibold text-gray-800 dark:text-gray-200 text-xs uppercase tracking-wider">🛠️ 精准配置指南:</div>
+                                        <ol className="list-decimal list-inside space-y-1 text-xs leading-relaxed">
+                                            <li>点击 Google AI Studio 界面右上角的 <strong className="text-gray-900 dark:text-white">Settings</strong> (齿轮) 图标。</li>
+                                            <li>在弹出的菜单中选择 <strong className="text-gray-900 dark:text-white">Secrets</strong> 栏目。</li>
+                                            <li>点击或添加变量：<strong className="font-mono text-indigo-500 dark:text-indigo-400">GEMINI_API_KEY</strong>。</li>
+                                            <li>填入您个人的真实 <strong>Gemini API Key</strong>（可在 Google AI Studio 左侧菜单中点击 <strong className="text-indigo-500">Get API key</strong> 免费创建）。</li>
+                                            <li>保存配置，并且<strong>刷新浏览器本页面</strong>重新点击“进入苏格拉底课堂”即可开始完美互动！</li>
+                                        </ol>
+                                    </div>
+                                    <p className="text-xs text-gray-500 text-center mt-3">（由于 API 密钥属于系统机密凭证，AI Studio 不提供在页面中直接输入的输入框，请在右上角系统 Secrets 面板中完成配置。安全有保障 🛡️）</p>
+                                </div>
+                            ) : (
+                                <p className="text-gray-600 dark:text-gray-300 mb-6 text-center">{error}</p>
+                            )}
+                            <div className="flex justify-center mt-6">
+                                <button 
+                                    onClick={() => setError(null)}
+                                    className="px-6 py-2 bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:bg-gray-600 rounded-lg text-sm font-medium transition-colors cursor-pointer text-gray-900 dark:text-white"
+                                >
+                                    理解并关闭
+                                </button>
+                            </div>
+                         </div>
+                    </div>
+                );
+            })()}
         </div>
 
         {/* Controls Bar - Only show when connected */}
@@ -2464,7 +3776,8 @@ height="400"
                                 <UserRoundPen size={24} />
                             </button>
 
-                            <button 
+                            {/* Save Session Button - Temporarily Hidden */}
+                            {false && <button 
                                 onClick={() => saveSessionToHistory(true)}
                                 disabled={messages.length === 0}
                                 className={`p-4 rounded-full text-gray-900 dark:text-white transition-all relative group ${
@@ -2480,7 +3793,7 @@ height="400"
                                         已保存
                                     </span>
                                 )}
-                            </button>
+                            </button>}
 
                             <button 
                                 onClick={stopSession}

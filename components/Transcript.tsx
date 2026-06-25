@@ -96,13 +96,13 @@ const Transcript: React.FC<TranscriptProps> = ({ messages, userProfile }) => {
               )}
             </div>
             <div
-              className={`p-4 rounded-xl text-lg leading-relaxed max-w-[90%] shadow-md ${
+              className={`p-4 rounded-xl text-2xl leading-relaxed max-w-[90%] shadow-md ${
                 msg.role === 'user'
                   ? 'bg-indigo-900/50 text-indigo-100 border border-indigo-500/20'
                   : 'bg-gray-100 dark:bg-gray-800 text-gray-800 dark:text-gray-100 border border-gray-300 dark:border-gray-700'
               }`}
             >
-              <div className="whitespace-pre-wrap tracking-wide markdown-body">
+              <div className="whitespace-pre-wrap tracking-wide markdown-body prose prose-2xl dark:prose-invert max-w-none">
                 <ReactMarkdown 
                     remarkPlugins={[remarkMath]} 
                     rehypePlugins={[rehypeKatex]}
@@ -122,7 +122,7 @@ const Transcript: React.FC<TranscriptProps> = ({ messages, userProfile }) => {
   );
 
   return (
-    <div className="flex flex-col h-full bg-white dark:bg-gray-900 border-l border-gray-300 dark:border-gray-700 overflow-hidden w-80 md:w-96">
+    <div className="flex flex-col h-full bg-white dark:bg-gray-900 border-l border-gray-300 dark:border-gray-700 overflow-hidden w-96 md:w-[32rem] lg:w-[40rem]">
       
       {/* Header */}
       <div className="p-4 border-b border-gray-300 dark:border-gray-700 bg-gray-100 dark:bg-gray-800 flex justify-between items-center shadow-md z-10">
