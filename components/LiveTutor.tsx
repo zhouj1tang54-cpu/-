@@ -820,7 +820,7 @@ const LiveTutor: React.FC = () => {
             videoRef.current.srcObject = newStream;
             await videoRef.current.play();
         } catch (e) {
-            console.error("Failed to switch camera", e);
+            console.warn("Failed to switch camera:", e);
             setError("切换摄像头失败");
         }
     }
@@ -1488,7 +1488,7 @@ const LiveTutor: React.FC = () => {
                   try {
                       videoStream = await navigator.mediaDevices.getUserMedia({ video: true });
                   } catch (vErr2) {
-                      console.error("All video acquisition attempts failed:", vErr2);
+                      console.warn("All video acquisition attempts failed (this is expected if no camera is plugged in):", vErr2);
                   }
               }
 
@@ -1496,7 +1496,7 @@ const LiveTutor: React.FC = () => {
               try {
                   audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
               } catch (aErr) {
-                  console.error("Audio acquisition failed:", aErr);
+                  console.warn("Audio acquisition failed (this is expected if no microphone is plugged in):", aErr);
               }
 
               // 3. Assemble combined stream
@@ -1533,7 +1533,7 @@ const LiveTutor: React.FC = () => {
         try {
             await videoRef.current.play();
         } catch (playErr) {
-            console.error("Error playing video stream:", playErr);
+            console.warn("Error playing video stream:", playErr);
         }
       }
 
@@ -1545,7 +1545,7 @@ const LiveTutor: React.FC = () => {
           apiKey: effectiveApiKey || 'proxied',
           httpOptions: {
               apiVersion: 'v1beta',
-              ...(effectiveApiKey ? {} : { baseUrl: `${window.location.protocol}//${window.location.host}/api/gemini/` })
+              baseUrl: `${window.location.protocol}//${window.location.host}/api/gemini`
           }
       });
       
@@ -1883,17 +1883,33 @@ const LiveTutor: React.FC = () => {
                 setIsBotSpeaking(false);
             }
           },
-          onclose: () => {
-            console.log('Connection Closed');
+          onclose: (event?: any) => {
+            console.log('Connection Closed:', event);
             if (silenceTimerRef.current) {
                 clearInterval(silenceTimerRef.current);
                 silenceTimerRef.current = null;
             }
+            if (event && event.reason) {
+                setError(`连接已关闭: ${event.reason} (代码: ${event.code})`);
+            } else if (event && event.code && event.code !== 1000 && event.code !== 1005) {
+                setError(`连接异常关闭 (代码: ${event.code})`);
+            }
             stopSession();
           },
-          onerror: (err) => {
+          onerror: (err: any) => {
             console.error('Gemini Error:', err);
-            setError(err instanceof Error ? err.message : "连接发生错误，请重试。");
+            let errMsg = "";
+            if (err instanceof Error) {
+                errMsg = err.message;
+            } else if (err && typeof err === 'object') {
+                errMsg = err.message || err.reason || (JSON.stringify(err) !== '{}' ? JSON.stringify(err) : '');
+            } else if (err) {
+                errMsg = String(err);
+            }
+            if (!errMsg) {
+                errMsg = "实时音视频通道连接失败。请检查您的网络连接或确保您的 GEMINI_API_KEY 配置正确。如果是临时测试密钥，建议在 Settings -> Secrets 中配置正式的 GEMINI_API_KEY。";
+            }
+            setError(errMsg);
             if (silenceTimerRef.current) {
                 clearInterval(silenceTimerRef.current);
                 silenceTimerRef.current = null;

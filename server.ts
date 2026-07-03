@@ -29,6 +29,17 @@ async function startServer() {
     });
   });
 
+  function getEffectiveApiKey(): string {
+    let envKey = process.env.GEMINI_API_KEY || '';
+    if (envKey === '' || envKey === 'MY_GEMINI_API_KEY') {
+        envKey = process.env.GOOGLE_GENAI_API_KEY || '';
+    }
+    if (envKey === '' || envKey === 'MY_GEMINI_API_KEY') {
+        envKey = 'AIzaSyBaGTea1IFQrkKHfyEiQ3ZTmCXBPj7VoPA';
+    }
+    return envKey;
+  }
+
   // Endpoints for saving and retrieving student data
   const studentData: Record<string, any> = {};
 
@@ -117,9 +128,7 @@ async function startServer() {
             return res.status(400).json({ error: 'Missing transcript' });
         }
 
-        let envKey = process.env.GEMINI_API_KEY || '';
-        if (envKey === 'MY_GEMINI_API_KEY') envKey = '';
-        const GEMINI_API_KEY = envKey || 'AIzaSyBaGTea1IFQrkKHfyEiQ3ZTmCXBPj7VoPA';
+        const GEMINI_API_KEY = getEffectiveApiKey();
 
         const ai = new GoogleGenAI({
             apiKey: GEMINI_API_KEY,
@@ -181,9 +190,7 @@ async function startServer() {
             return res.status(400).json({ error: 'Missing questionContent' });
         }
 
-        let envKey = process.env.GEMINI_API_KEY || '';
-        if (envKey === 'MY_GEMINI_API_KEY') envKey = '';
-        const GEMINI_API_KEY = envKey || 'AIzaSyBaGTea1IFQrkKHfyEiQ3ZTmCXBPj7VoPA';
+        const GEMINI_API_KEY = getEffectiveApiKey();
 
         const ai = new GoogleGenAI({
             apiKey: GEMINI_API_KEY,
@@ -258,9 +265,7 @@ async function startServer() {
             return res.status(400).json({ error: 'Missing base64Data' });
         }
 
-        let envKey = process.env.GEMINI_API_KEY || '';
-        if (envKey === 'MY_GEMINI_API_KEY') envKey = '';
-        const GEMINI_API_KEY = envKey || 'AIzaSyBaGTea1IFQrkKHfyEiQ3ZTmCXBPj7VoPA';
+        const GEMINI_API_KEY = getEffectiveApiKey();
 
         const ai = new GoogleGenAI({
             apiKey: GEMINI_API_KEY,
@@ -347,9 +352,7 @@ async function startServer() {
             return res.status(400).json({ error: 'Missing text to classify' });
         }
 
-        let envKey = process.env.GEMINI_API_KEY || '';
-        if (envKey === 'MY_GEMINI_API_KEY') envKey = '';
-        const GEMINI_API_KEY = envKey || 'AIzaSyBaGTea1IFQrkKHfyEiQ3ZTmCXBPj7VoPA';
+        const GEMINI_API_KEY = getEffectiveApiKey();
 
         const ai = new GoogleGenAI({
             apiKey: GEMINI_API_KEY,
@@ -427,9 +430,14 @@ async function startServer() {
 
   app.use(['/api/gemini', '/api/v1beta', '/api/v1'], async (req, res) => {
     try {
-        let envKey = process.env.GEMINI_API_KEY || '';
-        if (envKey === 'MY_GEMINI_API_KEY') envKey = '';
-        const GEMINI_API_KEY = envKey || 'AIzaSyBaGTea1IFQrkKHfyEiQ3ZTmCXBPj7VoPA';
+        let clientKey = req.query.key as string || '';
+        if (!clientKey) {
+            const match = req.url.match(/[?&]key=([^&]+)/);
+            if (match) {
+                clientKey = decodeURIComponent(match[1]);
+            }
+        }
+        const GEMINI_API_KEY = (clientKey && clientKey !== 'proxied') ? clientKey : getEffectiveApiKey();
         if (!GEMINI_API_KEY) {
             return res.status(500).json({ error: 'GEMINI_API_KEY is not configured in backend.' });
         }
@@ -548,11 +556,15 @@ async function startServer() {
   const wss = new WebSocketServer({ noServer: true });
 
   server.on('upgrade', (req, socket, head) => {
+      console.log(`[WS UPGRADE] Request path: ${req.url}`);
       if (req.url && req.url.startsWith('/api/gemini')) {
           wss.handleUpgrade(req, socket, head, (clientWs) => {
-              let envKey = process.env.GEMINI_API_KEY || '';
-              if (envKey === 'MY_GEMINI_API_KEY') envKey = ''; // Ignore placeholder
-              const GEMINI_API_KEY = envKey || 'AIzaSyBaGTea1IFQrkKHfyEiQ3ZTmCXBPj7VoPA';
+              let clientKey = '';
+              const match = req.url!.match(/[?&]key=([^&]+)/);
+              if (match) {
+                  clientKey = decodeURIComponent(match[1]);
+              }
+              const GEMINI_API_KEY = (clientKey && clientKey !== 'proxied') ? clientKey : getEffectiveApiKey();
               if (!GEMINI_API_KEY) {
                   console.warn('⚠️ GEMINI_API_KEY is not defined. WebSocket connection rejected.');
                   clientWs.close(1011, 'Internal Server Error: Missing API Key');
@@ -562,6 +574,8 @@ async function startServer() {
               let targetPath = req.url!.replace(/^\/api\/gemini/, '');
               // Clean up any double or multiple leading slashes (e.g. //ws -> /ws)
               targetPath = targetPath.replace(/^\/+/, '/');
+              // Strip version prefix if present at the start of targetPath (e.g. /v1beta/ws/... -> /ws/...)
+              targetPath = targetPath.replace(/^\/(v1beta|v1alpha|v1)\//, '/');
               let keyName = 'key';
 
               if (GEMINI_API_KEY.startsWith('auth_tokens/') || GEMINI_API_KEY.startsWith('ya29.')) {
